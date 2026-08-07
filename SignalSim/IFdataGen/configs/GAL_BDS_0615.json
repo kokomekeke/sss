@@ -1,0 +1,98 @@
+{
+  "version": 1.0,
+  "description": "GAL E1 + BDS B1C - Budapest - Kor trajektoria - 300s - 40 km/h",
+  "time": {
+    "type": "UTC",
+    "year": 2026,
+    "month": 6,
+    "day": 15,
+    "hour": 20,
+    "minute": 0,
+    "second": 0
+  },
+  "trajectory": {
+    "name": "GAL+BDS Circular Moving Scenario",
+    "initPosition": {
+      "type": "LLA",
+      "format": "d",
+      "longitude": 19.0,
+      "latitude": 47.5,
+      "altitude": 105.0
+    },
+    "initVelocity": {
+      "type": "SCU",
+      "speed": 40.0,
+      "course": 0
+    },
+    "trajectoryList": [
+      {
+      "type": "Const",
+      "time": 120.0
+      }
+        ]
+  },
+  "ephemeris": {
+    "type": "RINEX",
+    "name": "/home/sagax/Sisi/SignalSim/EphData/GPS_GAL_BDS_0615.rnx"
+  },
+  "output": {
+    "type": "IFdata",
+    "format": "IQ16",
+    "sampleFreq": 4.0,
+    "centerFreq": 1575.42,
+    "name": "MULTISAT_GAL_BDS_CIRCLE.bin",
+    "config": {
+      "elevationMask": 0
+    },
+    "systemSelect": [
+      {
+        "system": "GPS",
+        "signal": "L1CA",
+        "enable": false
+      },
+      {
+        "system": "GPS",
+        "signal": "L1C",
+        "enable": false
+      },
+      {
+        "system": "GPS",
+        "signal": "L2C",
+        "enable": false
+      },
+      {
+        "system": "GPS",
+        "signal": "L5",
+        "enable": false
+      },
+      {
+        "system": "BDS",
+        "signal": "B1C",
+        "enable": true
+      },
+      {
+        "system": "BDS",
+        "signal": "B1I",
+        "enable": false
+      },
+      {
+        "system": "Galileo",
+        "signal": "E1",
+        "enable": true
+      },
+      {
+        "system": "GLONASS",
+        "signal": "G1",
+        "enable": false
+      }
+    ]
+  },
+  "power": {
+    "noiseFloor": -172,
+    "initPower": {
+      "unit": "dBHz",
+      "value": 35
+    },
+    "elevationAdjust": true
+  }
+}

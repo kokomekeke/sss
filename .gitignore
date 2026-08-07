@@ -1,0 +1,10 @@
+.idea/
+.~lock.*#
+build/
+cmake-build-*/
+*.o
+*.obj
+*.exe
+*.out
+*.bin
+*.ods

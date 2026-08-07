@@ -1,0 +1,109 @@
+{
+  "version": 1.0,
+  "description": "GAL E1 - Budapest - Deak ter to Hosok tere - 180 seconds",
+
+    "time": {
+      "type": "UTC",
+      "year": 2026,
+      "month": 6,
+      "day": 15,
+      "hour": 12,
+      "minute": 0,
+      "second": 0
+    },
+
+  "trajectory": {
+    "name": "GAL E1 Moving Scenario",
+
+    "initPosition": {
+      "type": "LLA",
+      "format": "d",
+      "longitude": 19.0739,
+      "latitude": 47.4984,
+      "altitude": 105.0
+    },
+
+    "initVelocity": {
+      "type": "SCU",
+      "speed": 0,
+      "course": 0
+    },
+
+    "trajectoryList": [
+      {
+        "type": "Const",
+        "time": 120.0
+      }
+    ]
+  },
+
+  "ephemeris": {
+    "type": "RINEX",
+    "name": "/home/sagax/Sisi/SignalSim/EphData/GPS_GAL_BDS_0615.rnx"
+  },
+
+  "output": {
+    "type": "IFdata",
+    "format": "IQ16",
+    "sampleFreq": 4.0,
+    "centerFreq": 1575.42,
+    "name": "MULTISAT_GPS_GAL_BDS.bin",
+
+    "config": {
+      "elevationMask": 0
+    },
+    "systemSelect": [
+      {
+        "system": "GPS",
+        "signal": "L1CA",
+        "enable": true
+      },
+      {
+        "system": "GPS",
+        "signal": "L1C",
+        "enable": true
+      },
+      {
+        "system": "GPS",
+        "signal": "L2C",
+        "enable": false
+      },
+      {
+        "system": "GPS",
+        "signal": "L5",
+        "enable": false
+      },
+      {
+        "system": "BDS",
+        "signal": "B1C",
+        "enable": true
+      },
+      {
+        "system": "BDS",
+        "signal": "B1I",
+        "enable": false
+      },
+      {
+        "system": "Galileo",
+        "signal": "E1",
+        "enable": true
+      },
+      {
+        "system": "GLONASS",
+        "signal": "G1",
+        "enable": false
+      }
+    ]
+  },
+
+  "power": {
+    "noiseFloor": -172,
+
+    "initPower": {
+      "unit": "dBHz",
+      "value": 35
+    },
+
+    "elevationAdjust": true
+  }
+}

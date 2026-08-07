@@ -1,0 +1,109 @@
+{
+  "version": 1.0,
+  "description": "GPS L5C",
+
+    "time": {
+      "type": "UTC",
+      "year": 2026,
+      "month": 6,
+      "day": 24,
+      "hour": 14,
+      "minute": 30,
+      "second": 0
+    },
+
+  "trajectory": {
+    "name": "GPS L5C STATIC",
+
+    "initPosition": {
+      "type": "LLA",
+      "format": "d",
+      "longitude": 16.8358,
+      "latitude": 46.8808,
+      "altitude": 105.0
+    },
+
+    "initVelocity": {
+      "type": "SCU",
+      "speed": 0,
+      "course": 0
+    },
+
+    "trajectoryList": [
+      {
+        "type": "Const",
+        "time": 120.0
+      }
+    ]
+  },
+
+  "ephemeris": {
+    "type": "RINEX",
+    "name": "/home/sagax/Sisi/SignalSim/EphData/MULTISAT_0624.rnx"
+  },
+
+  "output": {
+    "type": "IFdata",
+    "format": "IQ16",
+    "sampleFreq": 21,
+    "centerFreq": 1176.45,
+    "name": "GPS_L5_0624.bin",
+
+    "config": {
+      "elevationMask": 5
+    },
+    "systemSelect": [
+      {
+        "system": "GPS",
+        "signal": "L1CA",
+        "enable": false
+      },
+      {
+        "system": "GPS",
+        "signal": "L1C",
+        "enable": false
+      },
+      {
+    "system": "GPS",
+    "signal": "L2C",
+    "enable": false
+      },
+      {
+    "system": "GPS",
+    "signal": "L5",
+    "enable": true
+      },
+      {
+        "system": "BDS",
+        "signal": "B1C",
+        "enable": false
+      },
+      {
+        "system": "BDS",
+        "signal": "B1I",
+        "enable": false
+      },
+      {
+        "system": "Galileo",
+        "signal": "E1",
+        "enable": false
+      },
+      {
+        "system": "GLONASS",
+        "signal": "G1",
+        "enable": false
+      }
+    ]
+  },
+
+  "power": {
+    "noiseFloor": -172,
+
+    "initPower": {
+      "unit": "dBHz",
+      "value": 35
+    },
+
+    "elevationAdjust": true
+  }
+}
