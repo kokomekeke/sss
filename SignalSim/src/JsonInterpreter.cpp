@@ -120,11 +120,15 @@ BOOL AssignParameters(JsonObject *Object, PUTC_TIME UtcTime, PLLA_POSITION Start
 			if (StartPos && StartVel && Trajectory)
 				SetTrajectory(Object->GetFirstObject(), *StartPos, *StartVel, *Trajectory);
 			break;
+
+
 		case 2: // "ephemeris"
 		case 3: // "almanac"
 		case 8: // "navigationData"
 			if (NavData)
 				SetNavData(Object, *NavData);
+
+
 		case 4:	// "output"
 			if (OutputParam) SetOutputParam(Object->GetFirstObject(), *OutputParam); break;
 		case 5:	// "power"

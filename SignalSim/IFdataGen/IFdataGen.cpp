@@ -138,6 +138,11 @@ int main(int argc, char* argv[])
     Object = JsonTree.GetRootObject();
 	AssignParameters(Object, &UtcTime, &StartPos, &StartVel, &Trajectory, &NavData, &OutputParam, &PowerControl, NULL);
 
+    //AssignParameters besettelte az UTCTimeot UTC formatumban, es ezutan kell meghivni az aktualizatort
+    printf("Start time of the simulation: %s\n", UtcTime);
+
+    ActualizeRinex();
+
 	if (!Arguments.OutputFile.empty())
 	{
 		// Override output filename
