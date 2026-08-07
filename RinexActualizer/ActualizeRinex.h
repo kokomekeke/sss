@@ -8,6 +8,6 @@ struct CommandArguments
 };
 
 bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments);
-
+void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData);
 
 #endif

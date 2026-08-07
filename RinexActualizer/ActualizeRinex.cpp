@@ -55,6 +55,10 @@ bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments) {
 	return true;
 }
 
+void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData) {
+
+}
+
 int main(int argc, char* argv[]) {
     CommandArguments Arguments;
 
