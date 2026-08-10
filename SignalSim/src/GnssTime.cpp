@@ -217,3 +217,4 @@ UTC_TIME GalileoTimeToUtc(GNSS_TIME GnssTime)
 	GnssTime.Week += 1024;
 	return GpsTimeToUtc(GnssTime);
 }
+

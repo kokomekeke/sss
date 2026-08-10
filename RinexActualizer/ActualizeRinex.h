@@ -1,6 +1,9 @@
 #ifndef ACTUALIZE_RINEX_H
 #define ACTUALIZE_RINEX_H
 
+#include "GnssTime.h"
+#include "BasicTypes.h"
+
 struct CommandArguments
 {
 	std::string ConfigFile;

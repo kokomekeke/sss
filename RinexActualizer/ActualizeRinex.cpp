@@ -56,7 +56,7 @@ bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments) {
 }
 
 void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData) {
-
+    GNSS_TIME time;
 }
 
 int main(int argc, char* argv[]) {
