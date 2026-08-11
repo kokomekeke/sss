@@ -57,21 +57,40 @@ bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments) {
 	return true;
 }
 
-void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData, OUTPUT_PARAM OutputParam) {
-    GNSS_TIME time;
-    PGPS_EPHEMERIS EphemerisPool;
+void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData, OUTPUT_PARAM OutputParam)
+{
+	PGPS_EPHEMERIS Pool;
+	PGLONASS_EPHEMERIS GlonassPool;
+	int Number;
 
-    for (i = 0; i < SbasSystem; i ++) {
+	for (int i = GpsSystem; i <= GlonassSystem; i++)
+	{
+		GnssSystem system = static_cast<GnssSystem>(i);
+		if (!OutputParam.FreqSelect[system])
+			continue;
 
-        GnssSystem system = static_cast<GnssSystem>(i);
+		if (system == GlonassSystem)
+		{
+			GlonassPool = NavData->GetGlonassEphemerisPool();
+			Number = NavData->GetGlonassEphemerisNumber();
+			ProcessGlonassSystem(UtcTime, GlonassPool, Number);
+		}
+		else
+		{
+			Pool = NavData->GetEphemerisPool(system);
+			Number = NavData->GetEphemerisNumber(system);
+			ProcessGnssSystem(UtcTime, Pool, Number);
+		}
+	}
+}
 
-        if (OutputParam.FreqSelect[system]) {
-            EphemerisPool = NavData->GetEphemerisPool(system);
-            ProcessGnssSystem(UtcTime, &EphemerisPool);
-        }
-    }
+void ProcessGlonassSystem (UTC_TIME UtcTime, PGLONASS_EPHEMERIS GlonassPool, int Number) {
+    GLONASS_TIME GlonassTime = UtcToGlonassTime(UtcTime);
 
-    //megkell tudni a konstellaciokat amik engedelyezve vannak a jsonben
+}
+
+void ProcessGnssSystem (UTC_TIME UtcTime, PGPS_EPHEMERIS Pool, int Number) {
+    GNSS_TIME GpsTime = UtcToGpsTime(UtcTime, false)
 }
 
 int main(int argc, char* argv[]) {
