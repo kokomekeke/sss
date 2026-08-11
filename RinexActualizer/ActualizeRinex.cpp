@@ -91,6 +91,10 @@ void ProcessGlonassSystem (UTC_TIME UtcTime, PGLONASS_EPHEMERIS GlonassPool, int
 
 void ProcessGnssSystem (UTC_TIME UtcTime, PGPS_EPHEMERIS Pool, int Number) {
     GNSS_TIME GpsTime = UtcToGpsTime(UtcTime, false)
+
+    double week = GpsTime.Week;
+
+    double tow = GpsTime.MilliSeconds / 1000.0;
 }
 
 int main(int argc, char* argv[]) {
