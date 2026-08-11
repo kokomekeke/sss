@@ -402,6 +402,7 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 		    Eph->valid = 0;      // unknown data type, Ephemeris invalid
 			break;
 	}
+	//INNEN KELL A SZUKSEGES IDOT KINYERNI
 	svid = ReadContentsTime(str, &time, &data[0]);
 	toc_time = UtcToGpsTime(time, FALSE);
 	for (i = 0; i < LineCount; i ++)

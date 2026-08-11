@@ -141,7 +141,7 @@ int main(int argc, char* argv[])
     //AssignParameters besettelte az UTCTimeot UTC formatumban, es ezutan kell meghivni az aktualizatort
     printf("Start time of the simulation: %s\n", UtcTime);
 
-    ActualizeRinex(UtcTime, &NavData);
+    ActualizeRinex(UtcTime, &NavData, OutputParam);
 
 	if (!Arguments.OutputFile.empty())
 	{

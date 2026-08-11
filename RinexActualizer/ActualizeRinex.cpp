@@ -1,5 +1,7 @@
 #include ActualizeRinex.h
 
+typedef enum { GpsSystem, BdsSystem, GalileoSystem, GlonassSystem, SbasSystem, QzssSystem, NavICSystem } GnssSystem;
+
 bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments) {
     const std::vector<std::string> CommandList = {
 		"--help", "-h",	// 0
@@ -55,8 +57,19 @@ bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments) {
 	return true;
 }
 
-void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData) {
+void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData, OUTPUT_PARAM OutputParam) {
     GNSS_TIME time;
+
+    for (i = 0; i < SbasSystem; i ++) {
+
+        GnssSystem system = static_cast<GnssSystem>(i);
+
+        if (OutputParam.FreqSelect[system]) {
+
+        }
+    }
+
+    //megkell tudni a konstellaciokat amik engedelyezve vannak a jsonben
 }
 
 int main(int argc, char* argv[]) {

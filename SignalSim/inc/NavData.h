@@ -48,6 +48,10 @@ public:
 	void ReadAlmFile(const char *filename, const char *JsonFile = NULL);
 	void CompleteAlmanac(GnssSystem system, UTC_TIME time);
 	void CompleteGlonassAlmanac(GLONASS_TIME time);
+	int GetEphemerisNumber(GnssSystem system) const;
+    PGPS_EPHEMERIS GetEphemerisPool(GnssSystem system);
+    int GetGlonassEphemerisNumber() const { return GlonassEphemerisNumber; }
+    PGLONASS_EPHEMERIS GetGlonassEphemerisPool() { return GlonassEphemerisPool; }
 
 private:
 	int GpsEphemerisNumber;
