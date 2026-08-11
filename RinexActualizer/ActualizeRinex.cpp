@@ -59,13 +59,15 @@ bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments) {
 
 void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData, OUTPUT_PARAM OutputParam) {
     GNSS_TIME time;
+    PGPS_EPHEMERIS EphemerisPool;
 
     for (i = 0; i < SbasSystem; i ++) {
 
         GnssSystem system = static_cast<GnssSystem>(i);
 
         if (OutputParam.FreqSelect[system]) {
-
+            EphemerisPool = NavData->GetEphemerisPool(system);
+            ProcessGnssSystem(UtcTime, &EphemerisPool);
         }
     }
 
