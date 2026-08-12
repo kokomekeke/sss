@@ -1,4 +1,5 @@
 #include ActualizeRinex.h
+#include <cstdlib>
 
 typedef enum { GpsSystem, BdsSystem, GalileoSystem, GlonassSystem, SbasSystem, QzssSystem, NavICSystem } GnssSystem;
 
@@ -68,33 +69,50 @@ void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData, OUTPUT_PARAM OutputPara
 		GnssSystem system = static_cast<GnssSystem>(i);
 		if (!OutputParam.FreqSelect[system])
 			continue;
+        switch (system) {
+            case GlonassSystem:
+                GlonassPool = NavData->GetGlonassEphemerisPool();
+			    Number = NavData->GetGlonassEphemerisNumber();
+			    ProcessGlonassSystem(UtcTime, GlonassPool, Number);
+                break;
+            case GpsSystem:
+                Pool = NavData->GetEphemerisPool(system);
+			    Number = NavData->GetEphemerisNumber(system);
+			    ProcessGnssSystem(UtcTime, Pool, Number);
+                break;
+            case GalileoSystem:
 
-		if (system == GlonassSystem)
-		{
-			GlonassPool = NavData->GetGlonassEphemerisPool();
-			Number = NavData->GetGlonassEphemerisNumber();
-			ProcessGlonassSystem(UtcTime, GlonassPool, Number);
-		}
-		else
-		{
-			Pool = NavData->GetEphemerisPool(system);
-			Number = NavData->GetEphemerisNumber(system);
-			ProcessGnssSystem(UtcTime, Pool, Number);
-		}
+                break;
+            case BdsSystem:
+
+                break;
+        }
 	}
 }
 
 void ProcessGlonassSystem (UTC_TIME UtcTime, PGLONASS_EPHEMERIS GlonassPool, int Number) {
     GLONASS_TIME GlonassTime = UtcToGlonassTime(UtcTime);
 
+    for (PGLONASS_EPHEMERIS Glo; Glo < GlonassPool + Number; Glo ++) {
+
+    }
 }
 
-void ProcessGnssSystem (UTC_TIME UtcTime, PGPS_EPHEMERIS Pool, int Number) {
-    GNSS_TIME GpsTime = UtcToGpsTime(UtcTime, false)
+void ProcessGpsSystem (UTC_TIME UtcTime, PGPS_EPHEMERIS Pool, int Number) {
+    GNSS_TIME GpsTime = UtcToGpsTime(UtcTime, false);
+    int SimWeek = GpsTime.Week;
+    double SimTow = GpsTime.MilliSeconds / 1000.0 + GpsTime.SubMilliSeconds / 1000.0;
 
-    double week = GpsTime.Week;
+    if (Pool == nullptr || Number <= 0)
+        return;
 
-    double tow = GpsTime.MilliSeconds / 1000.0;
+    PGPS_EPHEMERIS FirstElement = Pool;
+    int WeekDif = std::abs(SimWeek - FirstElement->week);
+    int TowDiff = static_cast<int>(SimTow) - FirstElement->toe;
+
+    for (PGPS_EPHEMERIS Gps = Pool; Gps < Pool + Number; Gps ++) {
+
+    }
 }
 
 int main(int argc, char* argv[]) {
