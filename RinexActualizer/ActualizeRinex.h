@@ -4,13 +4,26 @@
 #include "GnssTime.h"
 #include "BasicTypes.h"
 
-struct CommandArguments
-{
-	std::string ConfigFile;
-	std::string OutputFile;
-};
+typedef enum {
+    GpsSystem,
+    BdsSystem,
+    GalileoSystem,
+    GlonassSystem,
+    SbasSystem,
+    QzssSystem,
+    NavICSystem
+} GnssSystem;
 
-bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments);
-void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData);
+void ActualizeRinex(
+    UTC_TIME UtcTime,
+    CNavData* NavData,
+    OUTPUT_PARAM OutputParam
+);
+
+void ProcessGpsSystem(
+    UTC_TIME UtcTime,
+    PGPS_EPHEMERIS Pool,
+    int Number
+);
 
 #endif

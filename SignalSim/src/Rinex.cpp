@@ -403,6 +403,7 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 			break;
 	}
 	//INNEN KELL A SZUKSEGES IDOT KINYERNI
+	// G01 -> 1 az svid,
 	svid = ReadContentsTime(str, &time, &data[0]);
 	toc_time = UtcToGpsTime(time, FALSE);
 	for (i = 0; i < LineCount; i ++)

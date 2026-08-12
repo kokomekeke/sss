@@ -1,7 +1,7 @@
 #include ActualizeRinex.h
 #include <cstdlib>
 
-typedef enum { GpsSystem, BdsSystem, GalileoSystem, GlonassSystem, SbasSystem, QzssSystem, NavICSystem } GnssSystem;
+//typedef enum { GpsSystem, BdsSystem, GalileoSystem, GlonassSystem, SbasSystem, QzssSystem, NavICSystem } GnssSystem;
 
 bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments) {
     const std::vector<std::string> CommandList = {
@@ -77,8 +77,8 @@ void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData, OUTPUT_PARAM OutputPara
                 break;
             case GpsSystem:
                 Pool = NavData->GetEphemerisPool(system);
-			    Number = NavData->GetEphemerisNumber(system);
-			    ProcessGnssSystem(UtcTime, Pool, Number);
+                Number = NavData->GetEphemerisNumber(system);
+                ProcessGpsSystem(UtcTime, Pool, Number);
                 break;
             case GalileoSystem:
 
@@ -93,26 +93,65 @@ void ActualizeRinex(UTC_TIME UtcTime, CNavData* NavData, OUTPUT_PARAM OutputPara
 void ProcessGlonassSystem (UTC_TIME UtcTime, PGLONASS_EPHEMERIS GlonassPool, int Number) {
     GLONASS_TIME GlonassTime = UtcToGlonassTime(UtcTime);
 
-    for (PGLONASS_EPHEMERIS Glo; Glo < GlonassPool + Number; Glo ++) {
-
+    for (PGLONASS_EPHEMERIS Glo = GlonassPool;
+         Glo < GlonassPool + Number;
+         ++Glo)
+    {
     }
 }
 
-void ProcessGpsSystem (UTC_TIME UtcTime, PGPS_EPHEMERIS Pool, int Number) {
-    GNSS_TIME GpsTime = UtcToGpsTime(UtcTime, false);
-    int SimWeek = GpsTime.Week;
-    double SimTow = GpsTime.MilliSeconds / 1000.0 + GpsTime.SubMilliSeconds / 1000.0;
+static inline void SplitGpsTime(long long TotalSec, int &Week, int &Sec)
+{
+	// Helyes, előjeles moduló: TotalSec akár negatív is lehet
+	// (ha a szimulációs idő korábbi, mint az eredeti efemerisz-idő),
+	// a % operátor C++-ban negatív maradékot adna, ezt korrigáljuk.
+	Week = (int)(TotalSec >= 0 ? TotalSec / 604800 : (TotalSec - 604799) / 604800);
+	Sec  = (int)(TotalSec - (long long)Week * 604800);
+}
 
-    if (Pool == nullptr || Number <= 0)
-        return;
+void ProcessGpsSystem(UTC_TIME UtcTime, PGPS_EPHEMERIS Pool, int Number)
+{
+	if (Pool == nullptr || Number <= 0)
+		return;
 
-    PGPS_EPHEMERIS FirstElement = Pool;
-    int WeekDif = std::abs(SimWeek - FirstElement->week);
-    int TowDiff = static_cast<int>(SimTow) - FirstElement->toe;
+	// A szimulációs kezdő idő GPS-időben, ugyanazzal a konvencióval
+	// (UseLeapSecond = FALSE), mint amit a Rinex.cpp DecodeEphParam-ja
+	// használ a fájl beolvasásakor (UtcToGpsTime(time, FALSE)) —
+	// enélkül a két időbázis nem lenne összemérhető.
+	GNSS_TIME SimGpsTime = UtcToGpsTime(UtcTime, FALSE);
+	long long SimTotalSec = (long long)SimGpsTime.Week * 604800 + SimGpsTime.MilliSeconds / 1000;
 
-    for (PGPS_EPHEMERIS Gps = Pool; Gps < Pool + Number; Gps ++) {
+	// Referenciaként az első pool-elem EREDETI toc-ját használjuk.
+	// A toc minden formátumnál (LNAV, CNAV, CNAV2) garantáltan
+	// megbízhatóan ki van töltve, a toe-vel ellentétben (ahol pl.
+	// CNAV esetén Eph->toe = Eph->toc, tehát nem független adat).
+	PGPS_EPHEMERIS FirstElement = Pool;
+	long long FirstTotalSec = (long long)FirstElement->week * 604800 + FirstElement->toc;
 
-    }
+	// Az eltolás EGYETLEN, közös érték, amit minden rekordra alkalmazunk.
+	// Ez megőrzi a rekordok egymáshoz viszonyított időbeli távolságát
+	// (pl. ha az eredeti fájlban 2 óránként voltak új efemeriszek,
+	// az eltolás után is 2 óránként lesznek), csak az egészet
+	// a szimulációs kezdő időhöz igazítja.
+	long long OffsetSec = SimTotalSec - FirstTotalSec;
+
+	for (PGPS_EPHEMERIS Gps = Pool; Gps < Pool + Number; Gps++)
+	{
+		long long OrigTocTotal = (long long)Gps->week * 604800 + Gps->toc;
+		long long OrigToeTotal = (long long)Gps->week * 604800 + Gps->toe;
+
+		long long NewTocTotal = OrigTocTotal + OffsetSec;
+		long long NewToeTotal = OrigToeTotal + OffsetSec;
+
+		int NewWeek, NewToc, NewToeWeek, NewToe;
+		SplitGpsTime(NewTocTotal, NewWeek, NewToc);
+		SplitGpsTime(NewToeTotal, NewToeWeek, NewToe);
+
+		Gps->toc = NewToc;
+		Gps->toe = NewToe;
+		Gps->top = NewToe;      // a DecodeEphParam is mindig top = toe-t állít be, itt is így tartjuk konzisztensen
+		Gps->week = NewWeek;    // elsődleges hét-mező; a toc és toe azonos héten belül marad a legtöbb esetben
+	}
 }
 
 int main(int argc, char* argv[]) {
@@ -126,7 +165,7 @@ int main(int argc, char* argv[]) {
 
     if (!ParseArgs(argc, argv, Arguments)) {
         std::cout << std::string(50, '-') << std::endl;
-        std::cout << std::string('Something wrong happened') << std::endl;
+        std::cout << "Something wrong happened" << std::endl;
         std::cout << std::string(50, '-') << std::endl;
         return -1;
     };
