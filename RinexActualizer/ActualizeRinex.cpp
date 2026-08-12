@@ -1,4 +1,4 @@
-#include ActualizeRinex.h
+#include "ActualizeRinex.h"
 #include <cstdlib>
 
 //typedef enum { GpsSystem, BdsSystem, GalileoSystem, GlonassSystem, SbasSystem, QzssSystem, NavICSystem } GnssSystem;
@@ -48,11 +48,6 @@ bool ParseArgs(int argc, char* argv[], CommandArguments &Arguments) {
 			}
 			Arguments.InputFile = argv[++i];
 			break;
-
-		case 4:	// --validateo-nly
-			Arguments.ValidateOnly = true;
-			break;
-
 	}
 
 	return true;

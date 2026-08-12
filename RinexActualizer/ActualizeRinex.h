@@ -26,4 +26,10 @@ void ProcessGpsSystem(
     int Number
 );
 
+void ProcessGlonassSystem(
+    UTC_TIME UtcTime,
+    PGLONASS_EPHEMERIS Pool,
+    int Number
+);
+
 #endif
