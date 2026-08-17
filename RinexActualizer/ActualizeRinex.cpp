@@ -9,7 +9,7 @@ static constexpr long long GPS_WEEK_SECONDS = 604800;
  *
  * Handles negative TotalSec as well.
  */
-static inline void SplitGpsTime(
+static inline void SplitGnssTime(
     long long TotalSec,
     int& Week,
     int& Sec)
@@ -222,11 +222,9 @@ void ProcessGlonassSystem(
     GLONASS_TIME GlonassTime =
         UtcToGlonassTime(UtcTime);
 
-    /*
-     * TODO:
-     *
-     * Implement GLONASS actualization here.
-     */
+    PGLONASS_EPHEMERIS FirstGlo = GlonassPool
+
+    // ki kell szamolni a kulonbseget a rinex ido es az aktualizalt ido kozott es hozzaadni minden iteracioban az eredetihez
 
     for (PGLONASS_EPHEMERIS Glo = GlonassPool;
          Glo < GlonassPool + Number;
@@ -234,5 +232,9 @@ void ProcessGlonassSystem(
     {
         (void)Glo;
         (void)GlonassTime;
+        // a kulonbseget is hozza kell adni
+        Glo -> day = GlonassTime.Day;
+        Glo -> tk = ((int)(eph_time.MilliSeconds) + 450000) / 900000 * 900;
+        Glo -> tb
     }
 }
