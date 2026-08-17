@@ -388,7 +388,249 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 		case NavDataGalileoINav:
 		case NavDataGalileoFNav:
 		case NavDataNavICLnav:
+			LineCount --;BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERIS Eph)
+{
+	int svid, i, LineCount = 9;
+	UTC_TIME time;
+	GNSS_TIME toc_time;
+	double data[39];
+
+	switch (DataType)
+	{
+		case NavDataGpsLnav:
+		case NavDataBdsD1D2:
+		case NavDataGalileoINav:
+		case NavDataGalileoFNav:
+		case NavDataNavICLnav:
 			LineCount --;
+		case NavDataGpsCnav:
+		case NavDataBdsCnav3:
+			LineCount --;
+		case NavDataGpsCnav2:
+		case NavDataBdsCnav1:
+		case NavDataBdsCnav2:
+		    Eph->valid = 1;      // Ephemeris valid
+			break;
+		default:
+			LineCount = 0;
+		    Eph->valid = 0;      // unknown data type, Ephemeris invalid
+			break;
+	}
+	//INNEN KELL A SZUKSEGES IDOT KINYERNI
+	// G01 -> 1 az svid,
+	svid = ReadContentsTime(str, &time, &data[0]);
+	toc_time = UtcToGpsTime(time, FALSE);
+	for (i = 0; i < LineCount; i ++)
+	{
+		fgets(str, 128, fp_nav);
+		ReadContentsData(str, &data[i*4+3]);
+	}
+
+	// common variables
+	Eph->svid = svid;
+	// toe = sec
+	Eph->toc = toc_time.MilliSeconds / 1000;
+	Eph->af0 = data[0];
+	Eph->af1 = data[1];
+	Eph->af2 = data[2];
+	Eph->sqrtA = data[10];
+	Eph->ecc = data[8];
+	Eph->i0 = data[15];
+	Eph->omega0 = data[13];
+	Eph->w = data[17];
+	Eph->M0 = data[6];
+	Eph->delta_n = data[5];
+	Eph->omega_dot = data[18];
+	Eph->idot = data[19];
+	Eph->crc = data[16];
+	Eph->crs = data[4];
+	Eph->cuc = data[7];
+	Eph->cus = data[9];
+	Eph->cic = data[12];
+	Eph->cis = data[14];
+	Eph->top = Eph->toe = (int)(data[11] + 0.5);      /* toe in week */
+
+	// variables for different navigation format
+	switch (DataType)
+	{
+		case NavDataGpsLnav:
+			Eph->axis_dot = 0.0;
+			Eph->delta_n_dot = 0.0;
+			Eph->iodc = (unsigned short)data[26];      /* IODC */
+			Eph->iode = (unsigned char)data[3];      /* IODE/AODE */
+			Eph->week = (int)data[21];      /* week number */
+			Eph->health = (unsigned short)data[24];      /* sv health */
+			Eph->ura = GetUraIndex(data[23]);
+			if (Eph->ura < 0) Eph->ura = 0;	/* clipped to minimize 0 */
+			Eph->flag = (unsigned short)data[20] | ((unsigned short)data[22] << 2) | ((data[28] > 4.0) ? 8 : 0);
+			Eph->tgd = Eph->tgd_ext[4] = data[25];      /* TGD */
+			Eph->tgd2 = Eph->tgd * TGD_GAMMA_L2;      /* TGD for L2 */
+			Eph->tgd_ext[0] = Eph->tgd_ext[1] = Eph->tgd;	/* TGD for L1Cd and L1Cp */
+			Eph->tgd_ext[2] = Eph->tgd_ext[3] = Eph->tgd * TGD_GAMME_L5;	/* TGD for L5I and L5Q */
+			Eph->source = EPH_SOURCE_LNAV;
+			break;
+		case NavDataGpsCnav:
+			Eph->toe = Eph->toc;	/* toe must be same as toc */
+			Eph->axis_dot = data[3];
+			Eph->delta_n_dot = data[20];
+			Eph->iodc = 0;      /* IODC */
+			Eph->iode = 0;      /* IODE/AODE */
+			Eph->week = (int)data[32];      /* week number for WNop */
+			Eph->health = (unsigned short)data[24];      /* sv health */
+			Eph->ura = GetUraIndex(data[23]);
+			Eph->flag = 0;	// put URA_NED later
+			Eph->tgd = data[25] - data[27];      /* TGD - ISC_L1CA */
+			Eph->tgd2 = data[25] - data[28];      /* TGD - ISC_L2C */
+			Eph->tgd_ext[0] = Eph->tgd_ext[1] = Eph->tgd - data[27];	/* TGD for L1Cd and L1Cp */
+			Eph->tgd_ext[2] = data[25] - data[29];	/* TGD for L5I */
+			Eph->tgd_ext[3] = data[25] - data[30];	/* TGD for L5Q */
+			Eph->tgd_ext[4] = data[25];	/* store TGD for navigation data recovery */
+			Eph->source = EPH_SOURCE_CNAV;
+			break;
+		case NavDataGpsCnav2:
+			Eph->toe = Eph->toc;	/* toe must be same as toc */
+			Eph->axis_dot = data[3];
+			Eph->delta_n_dot = data[20];
+			Eph->iodc = 0;      /* IODC */
+			Eph->iode = 0;      /* IODE/AODE */
+			Eph->week = (int)data[36];      /* week number for WNop */
+			Eph->health = (unsigned short)data[24];      /* sv health */
+			Eph->ura = GetUraIndex(data[23]);
+			Eph->flag = 0;	// put URA_NED later
+			Eph->tgd = data[25] - data[27];      /* TGD - ISC_L1CA */
+			Eph->tgd2 = data[25] - data[28];      /* TGD - ISC_L2C */
+			Eph->tgd_ext[0] = data[25] - data[31];	/* TGD for L1Cd */
+			Eph->tgd_ext[1] = data[25] - data[32];	/* TGD for L1Cp */
+			Eph->tgd_ext[2] = data[25] - data[29];	/* TGD for L5I */
+			Eph->tgd_ext[3] = data[25] - data[30];	/* TGD for L5Q */
+			Eph->tgd_ext[4] = data[25];	/* store TGD for navigation data recovery */
+			Eph->source = EPH_SOURCE_CNV2;
+			break;
+		case NavDataGalileoINav:
+		case NavDataGalileoFNav:
+			Eph->axis_dot = 0.0;
+			Eph->delta_n_dot = 0.0;
+			Eph->iodc = (unsigned short)data[3];      /* IOD */
+			Eph->iode = (unsigned char)data[3];      /* IODE/AODE */
+			//
+			Eph->week = (int)data[21] - 1024;      /* week number  !! this is GPS week while RINEX document stated this as GAL Week# */
+			Eph->health = (unsigned short)data[24];      /* sv health */
+			Eph->ura = GetGalileoUra(data[23]);
+			Eph->flag = (unsigned short)data[20];
+			Eph->tgd = data[25];      /* TGD */
+			Eph->tgd2 = (Eph->flag & 0x2) ? data[25] : data[26];      /* TGD for E1/E5b */
+			Eph->tgd_ext[2] = Eph->tgd * TGD_GAMME_L5;	/* TGD for E5a */
+			Eph->tgd_ext[4] = Eph->tgd * TGD_GAMMA_E5b;	/* TGD for E5b */
+			Eph->source = (Eph->flag & 0x2) ? EPH_SOURCE_FNAV : EPH_SOURCE_INAV;
+			break;
+		case NavDataBdsD1D2:
+			Eph->axis_dot = 0.0;
+			Eph->delta_n_dot = 0.0;
+			Eph->iodc = (unsigned short)data[28];      /* AODC */
+			Eph->iode = (unsigned char)data[3];      /* IODE/AODE */
+			//
+			Eph->week = (int)data[21];      /* week number */
+			Eph->health = (data[24] != 0) ? 0x80 : 0;      /* sv health */
+			Eph->ura = GetUraIndex(data[23]);
+			Eph->flag = (Eph->sqrtA > 6000.0) ? ((Eph->i0 > 0.5) ? 2 : 1) : 3;
+//			Eph->flag = (unsigned short)data[20] | ((unsigned short)data[22] << 2) | ((data[28] > 4.0) ? 8 : 0);
+			Eph->tgd = data[25];      /* TGD */
+			Eph->tgd2 = data[26];      /* TGD for B2I */
+			Eph->tgd_ext[0] = Eph->tgd_ext[1] = Eph->tgd;	/* TGD for B1Cd and B1Cp */
+			Eph->tgd_ext[2] = Eph->tgd_ext[3] = Eph->tgd * TGD_GAMME_L5;	/* TGD for B2ad and B2ap */
+			Eph->tgd_ext[4] = Eph->tgd * TGD_GAMMA_E5b;	/* TGD for B2bI */
+			Eph->source = EPH_SOURCE_D1D2;
+			break;
+		case NavDataBdsCnav1:
+			Eph->axis_dot = data[3];
+			Eph->delta_n_dot = data[20];
+			Eph->iodc = (unsigned short)data[34];      /* IODC */
+			Eph->iode = (unsigned char)Eph->iodc;      /* IODE/AODE */
+			//
+			Eph->week = toc_time.Week - 1356;      /* week number from toc */
+			Eph->health = (unsigned short)data[32];      /* sv health */
+			Eph->ura = GetUraIndex(data[23]);
+			Eph->flag = (unsigned short)data[21] | ((unsigned short)data[33] << 2) | ((unsigned short)data[31] << 11);
+			Eph->tgd = data[29];      /* TGD for B1I */
+			Eph->tgd2 = data[29] * TGD_GAMMA_E5b;      /* TGD for B2I */
+			Eph->tgd_ext[0] = data[29] + data[27];	/* TGD for L1Cd */
+			Eph->tgd_ext[1] = data[29];	/* TGD for L1Cp */
+			Eph->tgd_ext[2] = Eph->tgd_ext[3] = data[30];	/* TGD for B2ad and B2ap */
+			Eph->tgd_ext[4] = data[29] * TGD_GAMMA_E5b;      /* TGD for B2bI */
+			Eph->source = EPH_SOURCE_CNV1;
+			break;
+		case NavDataBdsCnav2:
+			Eph->axis_dot = data[3];
+			Eph->delta_n_dot = data[20];
+			Eph->iodc = (unsigned short)data[34];      /* IODC */
+			Eph->iode = (unsigned char)Eph->iodc;      /* IODE/AODE */
+			//
+			Eph->week = toc_time.Week - 1356;      /* week number from toc */
+			Eph->health = (unsigned short)data[32];      /* sv health */
+			Eph->ura = GetUraIndex(data[23]);
+			Eph->flag = (unsigned short)data[21] | ((unsigned short)data[33] << 2) | ((unsigned short)data[31] << 11);
+			Eph->tgd = data[29];      /* TGD for B1I */
+			Eph->tgd2 = data[29] * TGD_GAMMA_E5b;      /* TGD for B2I */
+			Eph->tgd_ext[0] = Eph->tgd_ext[1] = data[29];	/* TGD for B1Cd and B1Cp */
+			Eph->tgd_ext[2] = data[30] + data[28];	/* TGD for B2ad */
+			Eph->tgd_ext[3] = data[30];	/* TGD forB2ap */
+			Eph->tgd_ext[4] = data[29] * TGD_GAMMA_E5b;      /* TGD for B2bI */
+			Eph->source = EPH_SOURCE_CNV2;
+			break;
+		case NavDataBdsCnav3:
+			Eph->axis_dot = data[3];
+			Eph->delta_n_dot = data[20];
+			Eph->iodc = 0;      /* IODC */
+			Eph->iode = (unsigned char)Eph->iodc;      /* IODE/AODE */
+			//
+			Eph->week = toc_time.Week - 1356;      /* week number from toc */
+			Eph->health = (unsigned short)data[28];      /* sv health */
+			Eph->ura = GetUraIndex(data[23]);
+			Eph->flag = (unsigned short)data[21] | ((unsigned short)data[29] << 8) | ((unsigned short)data[27] << 11);;
+			Eph->tgd = data[29] / TGD_GAMMA_E5b;      /* TGD for B1I */
+			Eph->tgd2 = data[29];      /* TGD for B2I */
+			Eph->tgd_ext[0] = Eph->tgd_ext[1] = Eph->tgd;	/* TGD for B1Cd and B1Cp */
+			Eph->tgd_ext[2] = Eph->tgd2;	/* TGD for B2ad */
+			Eph->tgd_ext[3] = Eph->tgd2;	/* TGD forB2ap */
+			Eph->tgd_ext[4] = Eph->tgd2;      /* TGD for B2bI */
+			Eph->source = EPH_SOURCE_CNV3;
+			break;
+		case NavDataNavICLnav:
+			Eph->axis_dot = 0.0;
+			Eph->delta_n_dot = 0.0;
+			Eph->iodc = (unsigned short)data[26];      /* IODC */
+			Eph->iode = (unsigned char)Eph->iodc;      /* IODE/AODE */
+			//
+			Eph->week = (int)data[21];      /* week number */
+			Eph->health = (unsigned short)data[24];      /* sv health */
+			Eph->ura = GetUraIndex(data[23]);
+			Eph->flag = (unsigned short)data[20] | ((unsigned short)data[22] << 2) | ((data[28] > 4.0) ? 8 : 0);
+			Eph->tgd = data[25];      /* TGD */
+			Eph->source = EPH_SOURCE_LNAV;
+			break;
+	}
+
+	// calculate derived variables
+	if (DataType == NavDataBdsD1D2 || DataType == NavDataBdsCnav1 || DataType == NavDataBdsCnav2 || DataType == NavDataBdsCnav3)
+	{
+		Eph->axis = Eph->sqrtA * Eph->sqrtA;
+		Eph->n = CGCS2000_SQRT_GM / (Eph->sqrtA * Eph->axis) + Eph->delta_n;
+		Eph->root_ecc = sqrt(1.0 - Eph->ecc * Eph->ecc);
+		Eph->omega_t = Eph->omega0 - CGCS2000_OMEGDOTE * Eph->toe;
+		Eph->omega_delta = (svid <= 5 || Eph->svid >= 59) ? Eph->omega_dot : (Eph->omega_dot - CGCS2000_OMEGDOTE);
+		Eph->flag = (Eph->svid <= 5 || Eph->svid >= 59) ? 1 : (Eph->axis > 4e7) ? 2 : 3;	// SatType
+	}
+	else //if (DataType == NavDataGpsLnav || DataType == NavDataGalileoIFNav)	// for GPS, Galileo
+	{
+		Eph->axis = Eph->sqrtA * Eph->sqrtA;
+		Eph->n = WGS_SQRT_GM / (Eph->sqrtA * Eph->axis) + Eph->delta_n;
+		Eph->root_ecc = sqrt(1.0 - Eph->ecc * Eph->ecc);
+		Eph->omega_t = Eph->omega0 - WGS_OMEGDOTE * Eph->toe;
+		Eph->omega_delta = Eph->omega_dot - WGS_OMEGDOTE;
+	}
+
+	return TRUE;
+}
 		case NavDataGpsCnav:
 		case NavDataBdsCnav3:
 			LineCount --;
