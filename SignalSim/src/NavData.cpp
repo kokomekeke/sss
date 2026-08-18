@@ -530,3 +530,38 @@ void CNavData::CompleteGlonassAlmanac(GLONASS_TIME time)
 			GlonassAlmanac[i].lambda * 180, GlonassAlmanac[i].w * 180, GlonassAlmanac[i].clock_error, GlonassAlmanac[i].freq);*/
 	}
 }
+
+
+int CNavData::GetEphemerisNumber(GnssSystem system) const
+{
+    switch (system)
+    {
+    case GpsSystem:
+        return GpsEphemerisNumber;
+    case BdsSystem:
+        return BdsEphemerisNumber;
+    case GalileoSystem:
+        return GalileoEphemerisNumber;
+    case GlonassSystem:
+        return GlonassEphemerisNumber;
+    default:
+        return 0;
+    }
+}
+
+PGPS_EPHEMERIS CNavData::GetEphemerisPool(GnssSystem system)
+{
+    switch (system)
+    {
+    case GpsSystem:
+        return GpsEphemerisPool;
+    case BdsSystem:
+        return BdsEphemerisPool;
+    case GalileoSystem:
+        return GalileoEphemerisPool;
+    case GlonassSystem:
+        return (PGPS_EPHEMERIS)GlonassEphemerisPool;
+    default:
+        return NULL;
+    }
+}

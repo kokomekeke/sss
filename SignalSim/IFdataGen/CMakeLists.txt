@@ -1,135 +1,302 @@
 cmake_minimum_required(VERSION 3.16)
 
-# ============================================================================
-# Project
-# ============================================================================
+project(
+    SisiGnssTools
+    LANGUAGES C CXX
+)
 
-project(IFdataGen LANGUAGES C CXX)
+# ============================================================================
+# C++ standard
+# ============================================================================
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS  OFF)
-
-# Optional: tune for the build-host CPU
-option(USE_NATIVE_OPT "Tune code for the host CPU (-march=native or /arch:AVX2)" ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ============================================================================
-# Dependencies
+# Options
 # ============================================================================
 
-find_package(OpenMP QUIET)
+option(
+    USE_NATIVE_OPT
+    "Tune code for the build-host CPU"
+    ON
+)
+
+option(
+    BUILD_RINEX_ACTUALIZER
+    "Build standalone RinexActualizer executable"
+    OFF
+)
 
 # ============================================================================
-# Sources and includes
+# Paths
 # ============================================================================
 
-file(GLOB SRC CONFIGURE_DEPENDS
-     "IFdataGen.cpp"
-     "../src/*.cpp")      # Adjust the path if your layout differs
+set(SIGNALSIM_SRC_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src"
+)
 
-add_executable(IFdataGen ${SRC})
-target_include_directories(IFdataGen PRIVATE ../inc)
+set(SIGNALSIM_INC_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../inc"
+)
 
-# ============================================================================
-# IPO / LTO support check
-# ============================================================================
-
-include(CheckIPOSupported)
-check_ipo_supported(RESULT IPO_OK OUTPUT IPO_ERR)
-
-# ============================================================================
-# Compiler and linker flags
-# ============================================================================
-
-if (MSVC)
-
-    # ----- MSVC release and relwithdebinfo flag lists -----
-    set(MSVC_RELEASE_FLAGS
-        /O2 /Ot /fp:fast /Ob3 /Zi /permissive-)
-    if (IPO_OK)
-        list(APPEND MSVC_RELEASE_FLAGS /GL)
-    endif()
-
-    set(MSVC_RELDBG_FLAGS
-        /O2 /Zi)
-    if (IPO_OK)
-        list(APPEND MSVC_RELDBG_FLAGS /GL)
-    endif()
-
-    target_compile_options(IFdataGen PRIVATE
-        $<$<CONFIG:Release>:${MSVC_RELEASE_FLAGS}>
-        $<$<CONFIG:RelWithDebInfo>:${MSVC_RELDBG_FLAGS}>
-        $<$<CONFIG:Debug>:/Od /Zi>)
-
-    # ----- MSVC link options -----
-    if (IPO_OK)
-        set(MSVC_LINK_LTCG /LTCG /INCREMENTAL:NO)
-    else()
-        set(MSVC_LINK_LTCG "")
-    endif()
-
-    target_link_options(IFdataGen PRIVATE
-        $<$<CONFIG:Release>:${MSVC_LINK_LTCG}>
-        $<$<CONFIG:RelWithDebInfo>:${MSVC_LINK_LTCG}>)
-
-    # Optional host-CPU tuning
-    if (USE_NATIVE_OPT)
-        target_compile_options(IFdataGen PRIVATE /arch:AVX2)
-    endif()
-
-else()  # GCC / Clang branch
-
-    # ----- GCC / Clang release flags -----
-    set(GCC_CLANG_RELEASE_FLAGS
-        -O3 -ffast-math -funroll-loops -fstrict-aliasing)
-    if (IPO_OK)
-        list(APPEND GCC_CLANG_RELEASE_FLAGS -flto=auto)
-    endif()
-
-    target_compile_options(IFdataGen PRIVATE
-        $<$<CONFIG:Release>:${GCC_CLANG_RELEASE_FLAGS}>
-        $<$<CONFIG:RelWithDebInfo>:-O3 -g>  #        $<$<CONFIG:RelWithDebInfo>:-O3 -g -ffast-math>
-        $<$<CONFIG:Debug>:-O0 -g>)
-
-    # Enable LTO at link time if supported
-    if (IPO_OK)
-        set_property(TARGET IFdataGen PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-    endif()
-
-    # Optional host-CPU tuning
-    if (USE_NATIVE_OPT)
-        target_compile_options(IFdataGen PRIVATE -march=native -mtune=native)
-    endif()
-
-endif()
+set(RINEX_ACTUALIZER_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../RinexActualizer"
+)
 
 # ============================================================================
 # OpenMP
 # ============================================================================
 
-if (OpenMP_CXX_FOUND)
-    target_link_libraries(IFdataGen PUBLIC OpenMP::OpenMP_CXX)
-    target_compile_definitions(IFdataGen PRIVATE USE_OPENMP)
+find_package(OpenMP QUIET)
+
+# ============================================================================
+# SignalSim sources
+# ============================================================================
+
+file(GLOB SIGNALSIM_SOURCES CONFIGURE_DEPENDS
+    "${SIGNALSIM_SRC_DIR}/*.cpp"
+)
+
+# ============================================================================
+# RINEX Actualizer library
+# ============================================================================
+
+add_library(
+    RinexActualizer
+    STATIC
+
+    "${RINEX_ACTUALIZER_DIR}/ActualizeRinex.cpp"
+)
+
+target_include_directories(
+    RinexActualizer
+    PUBLIC
+
+    "${RINEX_ACTUALIZER_DIR}"
+    "${SIGNALSIM_INC_DIR}"
+)
+
+target_compile_features(
+    RinexActualizer
+    PUBLIC
+        cxx_std_20
+)
+
+# ============================================================================
+# IFdataGen executable
+# ============================================================================
+
+add_executable(
+    IFdataGen
+
+    "${CMAKE_CURRENT_SOURCE_DIR}/IFdataGen.cpp"
+
+    ${SIGNALSIM_SOURCES}
+)
+
+target_include_directories(
+    IFdataGen
+    PRIVATE
+
+    "${SIGNALSIM_INC_DIR}"
+    "${RINEX_ACTUALIZER_DIR}"
+)
+
+# ============================================================================
+# Link RINEX Actualizer
+# ============================================================================
+
+target_link_libraries(
+    IFdataGen
+    PRIVATE
+
+    RinexActualizer
+)
+
+# ============================================================================
+# OpenMP
+# ============================================================================
+
+if(OpenMP_CXX_FOUND)
+
+    target_link_libraries(
+        IFdataGen
+        PUBLIC
+            OpenMP::OpenMP_CXX
+    )
+
+    target_link_libraries(
+        RinexActualizer
+        PUBLIC
+            OpenMP::OpenMP_CXX
+    )
+
+    target_compile_definitions(
+        IFdataGen
+        PRIVATE
+            USE_OPENMP
+    )
+
 endif()
 
 # ============================================================================
-# Hot-reload for MSVC (CMP0141)
+# IPO / LTO
 # ============================================================================
 
-if (POLICY CMP0141)
-    cmake_policy(SET CMP0141 NEW)
-    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
-        "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,\
-        $<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,\
-        $<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
+include(CheckIPOSupported)
+
+check_ipo_supported(
+    RESULT IPO_OK
+    OUTPUT IPO_ERR
+)
+
+if(IPO_OK)
+
+    set_property(
+        TARGET IFdataGen
+        PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+
+    set_property(
+        TARGET RinexActualizer
+        PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE
+    )
+
 endif()
 
 # ============================================================================
-# Status output
+# MSVC / GCC / Clang optimization
 # ============================================================================
 
-message(STATUS "OpenMP found           : ${OpenMP_CXX_FOUND}")
-message(STATUS "IPO / LTO supported    : ${IPO_OK}")
-message(STATUS "Host-CPU tuning enabled: ${USE_NATIVE_OPT}")
+if(MSVC)
 
-# TODO: Add tests and install targets if needed.
+    target_compile_options(
+        IFdataGen
+        PRIVATE
+
+        $<$<CONFIG:Release>:/O2 /Ot /fp:fast /Ob3 /Zi /permissive->
+        $<$<CONFIG:RelWithDebInfo>:/O2 /Zi>
+        $<$<CONFIG:Debug>:/Od /Zi>
+    )
+
+    target_compile_options(
+        RinexActualizer
+        PRIVATE
+
+        $<$<CONFIG:Release>:/O2 /Ot /fp:fast /Ob3 /Zi /permissive->
+        $<$<CONFIG:RelWithDebInfo>:/O2 /Zi>
+        $<$<CONFIG:Debug>:/Od /Zi>
+    )
+
+    if(USE_NATIVE_OPT)
+
+        target_compile_options(
+            IFdataGen
+            PRIVATE
+                /arch:AVX2
+        )
+
+        target_compile_options(
+            RinexActualizer
+            PRIVATE
+                /arch:AVX2
+        )
+
+    endif()
+
+else()
+
+    target_compile_options(
+        IFdataGen
+        PRIVATE
+
+        $<$<CONFIG:Release>:-O3 -ffast-math -funroll-loops -fstrict-aliasing>
+        $<$<CONFIG:RelWithDebInfo>:-O3 -g>
+        $<$<CONFIG:Debug>:-O0 -g>
+    )
+
+    target_compile_options(
+        RinexActualizer
+        PRIVATE
+
+        $<$<CONFIG:Release>:-O3 -ffast-math -funroll-loops -fstrict-aliasing>
+        $<$<CONFIG:RelWithDebInfo>:-O3 -g>
+        $<$<CONFIG:Debug>:-O0 -g>
+    )
+
+    if(USE_NATIVE_OPT)
+
+        target_compile_options(
+            IFdataGen
+            PRIVATE
+                -march=native
+                -mtune=native
+        )
+
+        target_compile_options(
+            RinexActualizer
+            PRIVATE
+                -march=native
+                -mtune=native
+        )
+
+    endif()
+
+endif()
+
+# ============================================================================
+# Standalone RinexActualizer executable
+# ============================================================================
+
+if(BUILD_RINEX_ACTUALIZER)
+
+    add_executable(
+        RinexActualizerApp
+
+        "${RINEX_ACTUALIZER_DIR}/RinexActualizerMain.cpp"
+    )
+
+    target_include_directories(
+        RinexActualizerApp
+        PRIVATE
+
+        "${RINEX_ACTUALIZER_DIR}"
+        "${SIGNALSIM_INC_DIR}"
+    )
+
+    target_link_libraries(
+        RinexActualizerApp
+        PRIVATE
+
+        RinexActualizer
+    )
+
+    if(OpenMP_CXX_FOUND)
+
+        target_link_libraries(
+            RinexActualizerApp
+            PUBLIC
+                OpenMP::OpenMP_CXX
+        )
+
+    endif()
+
+endif()
+
+# ============================================================================
+# Status
+# ============================================================================
+
+message(STATUS "")
+message(STATUS "==============================================")
+message(STATUS " Sisi GNSS Tools")
+message(STATUS "==============================================")
+message(STATUS "RINEX Actualizer dir : ${RINEX_ACTUALIZER_DIR}")
+message(STATUS "OpenMP found         : ${OpenMP_CXX_FOUND}")
+message(STATUS "IPO / LTO supported  : ${IPO_OK}")
+message(STATUS "Native optimization  : ${USE_NATIVE_OPT}")
+message(STATUS "Standalone actualizer: ${BUILD_RINEX_ACTUALIZER}")
+message(STATUS "==============================================")
+message(STATUS "")

@@ -415,8 +415,7 @@ JsonObject *JsonStream::ParseObject(JsonObject *Parent, int IsObject, GetStream 
 					return NULL;
 			}
 			break;
-		case 1:	//
-		 waiting for '\"' as start of key
+		case 1:	// waiting for '\"' as start of key
 			if (*p == '\"')
 			{
 				CopyString(CurObject->Key, MAX_KEY_LENGTH);

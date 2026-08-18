@@ -12,6 +12,7 @@
 #endif
 
 #include "SignalSim.h"
+#include "ActualizeRinex.h"
 
 #define TOTAL_GPS_SAT 32
 #define TOTAL_BDS_SAT 63
@@ -117,7 +118,7 @@ int main(int argc, char* argv[])
 	if (!ParseCommandLineArgs(argc, argv, Arguments))
 		return 1;
 
-	
+
 	printf("\n================================================================================\n");
 	printf("                          IF SIGNAL GENERATION \n");
 	printf("================================================================================\n");
@@ -372,7 +373,7 @@ int main(int argc, char* argv[])
 	memset(SatIfSignal, 0, sizeof(SatIfSignal));
 	TotalChannelNumber = 0;
 	printf("[INFO]\tGenerating IF data with following satellite signals:\n\n");
-	
+
 	// Enhanced signal display with cleaner formatting
 	printf("[INFO]\tEnabled Signals:\n");
 
@@ -386,7 +387,7 @@ int main(int argc, char* argv[])
 		if (OutputParam.FreqSelect[GpsSystem] & (1 << SIGNAL_INDEX_L5)) printf("L5 ");
 		printf("]\n");
 	}
-	
+
 	// BDS signals
 	if (OutputParam.FreqSelect[BdsSystem]) {
 		printf("\tBDS : [ ");
@@ -398,7 +399,7 @@ int main(int argc, char* argv[])
 		if (OutputParam.FreqSelect[BdsSystem] & (1 << SIGNAL_INDEX_B3I)) printf("B3I ");
 		printf("]\n");
 	}
-	
+
 	// Galileo signals
 	if (OutputParam.FreqSelect[GalileoSystem]) {
 		printf("\tGAL : [ ");
@@ -408,7 +409,7 @@ int main(int argc, char* argv[])
 		if (OutputParam.FreqSelect[GalileoSystem] & (1 << SIGNAL_INDEX_E6)) printf("E6 ");
 		printf("]\n");
 	}
-	
+
 	// GLONASS signals
 	if (OutputParam.FreqSelect[GlonassSystem]) {
 		printf("\tGLO : [ ");
@@ -430,7 +431,7 @@ int main(int argc, char* argv[])
 
 
 	printf("Signals Summary Table:\n");
-	
+
 	// Enhanced constellation summary table
 	printf("+---------------+-------------+--------------+------------------------------+\n");
 	printf("| Constellation | Visible SVs | Signals / SV | Total Signals / Visible SVs  |\n");
@@ -440,7 +441,7 @@ int main(int argc, char* argv[])
 	printf("| Galileo       | %-11d | %-12d | %-28d |\n", GalSatNumber, GalSignalCount, GalSatNumber * GalSignalCount);
 	printf("| GLONASS       | %-11d | %-12d | %-28d |\n", GloSatNumber, GloSignalCount, GloSatNumber * GloSignalCount);
 	printf("+---------------+-------------+--------------+------------------------------+\n");
-	
+
 	int TotalVisibleSVs = GpsSatNumber + BdsSatNumber + GalSatNumber + GloSatNumber;
 	int TotalChannels = GpsSatNumber * GpsSignalCount + BdsSatNumber * BdsSignalCount + GalSatNumber * GalSignalCount + GloSatNumber * GloSignalCount;
 	printf("Total Visible SVs = %d, Total channels = %d\n\n", TotalVisibleSVs, TotalChannels);
@@ -466,7 +467,7 @@ int main(int argc, char* argv[])
 				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &GpsSatParam[GpsEphVisible[i]->svid-1], GetNavData(GpsSystem, SignalIndex, NavBitArray));
 			}
 			TotalChannelNumber++;
-			
+
 			if (svCount % 4 == 0) printf("|");
 			printf(" %02d | %+12d |", GpsEphVisible[i]->svid, (int)GpsSatParam[GpsEphVisible[i]->svid-1].GetDoppler(SignalIndex));
 			svCount++;
@@ -480,7 +481,7 @@ int main(int argc, char* argv[])
 		if (svCount > 0 && (svCount-1) % 4 == 3) printf("\n");
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
 	}
-	
+
 	for (SignalIndex = SIGNAL_INDEX_B1C; SignalIndex <= SIGNAL_INDEX_B2b; SignalIndex++)
 	{
 		if (!(OutputParam.FreqSelect[BdsSystem] & (1 << SignalIndex)))
@@ -502,7 +503,7 @@ int main(int argc, char* argv[])
 				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &BdsSatParam[BdsEphVisible[i]->svid - 1], GetNavData(BdsSystem, SignalIndex, NavBitArray));
 			}
 			TotalChannelNumber++;
-			
+
 			if (svCount % 4 == 0) printf("|");
 			printf(" %02d | %+12d |", BdsEphVisible[i]->svid, (int)BdsSatParam[BdsEphVisible[i]->svid-1].GetDoppler(SignalIndex));
 			svCount++;
@@ -515,7 +516,7 @@ int main(int argc, char* argv[])
 		if (svCount > 0 && (svCount-1) % 4 == 3) printf("\n");
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
 	}
-	
+
 	for (SignalIndex = SIGNAL_INDEX_E1; SignalIndex <= SIGNAL_INDEX_E6; SignalIndex++)
 	{
 		if (!(OutputParam.FreqSelect[GalileoSystem] & (1 << SignalIndex)))
@@ -525,7 +526,7 @@ int main(int argc, char* argv[])
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
 		printf("| SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) |\n");
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
-		
+
 		int svCount = 0;
 		for (i = 0; i < GalSatNumber; i++)
 		{
@@ -537,7 +538,7 @@ int main(int argc, char* argv[])
 				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &GalSatParam[GalEphVisible[i]->svid - 1], GetNavData(GalileoSystem, SignalIndex, NavBitArray));
 			}
 			TotalChannelNumber++;
-			
+
 			if (svCount % 4 == 0) printf("|");
 			printf(" %02d | %+12d |", GalEphVisible[i]->svid, (int)GalSatParam[GalEphVisible[i]->svid-1].GetDoppler(SignalIndex));
 			svCount++;
@@ -550,7 +551,7 @@ int main(int argc, char* argv[])
 		if (svCount > 0 && (svCount-1) % 4 == 3) printf("\n");
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n\n");
 	}
-	
+
 	for (SignalIndex = SIGNAL_INDEX_G1; SignalIndex <= SIGNAL_INDEX_G2; SignalIndex++)
 	{
 		if (!(OutputParam.FreqSelect[GlonassSystem] & (1 << SignalIndex)))
@@ -573,7 +574,7 @@ int main(int argc, char* argv[])
 				SatIfSignal[TotalChannelNumber]->InitState(CurTime, &GloSatParam[GloEphVisible[i]->n - 1], GetNavData(GlonassSystem, SignalIndex, NavBitArray));
 			}
 			TotalChannelNumber++;
-			
+
 			if (svCount % 4 == 0) printf("|");
 			printf(" %02d | %+12d |", GloEphVisible[i]->n, (int)GloSatParam[GloEphVisible[i]->n-1].GetDoppler(SignalIndex));
 			svCount++;
@@ -615,16 +616,16 @@ int main(int argc, char* argv[])
 	double AGCGain = 1.0;
 	printf("[INFO]\tStarting signal generation loop...\n");
 	fflush(stdout);
-	
+
 	auto start_time = std::chrono::high_resolution_clock::now();
-	
+
 	while (!StepToNextMs())
 	{
 		exec_cycle ++;
 		// generate white noise
 		for (i = 0; i < OutputParam.SampleFreq; i ++)
 			NoiseArray[i] = GenerateNoise(1.0);
-		
+
 		// Use parallel or serial processing based on command line flag
 		if (Arguments.MultiThread)
 		{
@@ -638,7 +639,7 @@ int main(int argc, char* argv[])
 			// OpenMP not available, fall back to sequential processing
 			for (i = 0; i < TotalChannelNumber; i++)
 				SatIfSignal[i]->GetIfSample(CurTime);
-			
+
 			#endif
 		}
 		else
@@ -656,19 +657,19 @@ int main(int argc, char* argv[])
 				NoiseArray[j] += SatIfSignal[i]->SampleArray[j];
 		}
 
-		
-		if (OutputParam.Format == OutputFormatIQ2) 
+
+		if (OutputParam.Format == OutputFormatIQ2)
 		{
 			TotalClippedSamples += QuantSamplesIQ2(NoiseArray, OutputParam.SampleFreq, QuantArray, AGCGain);
 			// Pack 2 samples per byte
 			fwrite(QuantArray, sizeof(unsigned char), OutputParam.SampleFreq / 2, IfFile);	// 1/2 byte/sample
 		}
-		else if (OutputParam.Format == OutputFormatIQ4) 
+		else if (OutputParam.Format == OutputFormatIQ4)
 		{
 			TotalClippedSamples += QuantSamplesIQ4(NoiseArray, OutputParam.SampleFreq, QuantArray, AGCGain);
 			fwrite(QuantArray, sizeof(unsigned char), OutputParam.SampleFreq, IfFile); // 1 byte/sample
 		}
-		else if (OutputParam.Format == OutputFormatIQ16) 
+		else if (OutputParam.Format == OutputFormatIQ16)
 		{
 			TotalClippedSamples += QuantSamplesIQ16(NoiseArray, OutputParam.SampleFreq, QuantArray, AGCGain);
 			fwrite(QuantArray, sizeof(unsigned char) * 4, OutputParam.SampleFreq, IfFile); // 4 bytes/sample
@@ -708,17 +709,17 @@ int main(int argc, char* argv[])
 		{
 			auto current_time = std::chrono::high_resolution_clock::now();
 			auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
-			
+
 			double percentage = (double)exec_cycle / totalDurationMs * 100.0;
 			double currentMB = (exec_cycle * bytesPerMs) / (1024.0 * 1024.0);
 			double mbPerSec = (elapsed > 0) ? (currentMB * 1000.0) / elapsed : 0.0;
-			
+
 			// Calculate estimated time remaining
 			long etaMs = 0;
 			if (percentage > 0 && elapsed > 0) {
 				etaMs = (long)((elapsed * (100.0 - percentage)) / percentage);
 			}
-			
+
 			// Progress bar with percentage in center
 			int barWidth = 50;
 			int progress = (int)(percentage * barWidth / 100.0);
@@ -726,7 +727,7 @@ int main(int argc, char* argv[])
 			sprintf(progressStr, "%.1f%%", percentage);
 			int progressStrLen = strlen(progressStr);
 			int centerPos = (barWidth - progressStrLen) / 2;
-			
+
 			printf("\r[");
 			for (int k = 0; k < barWidth; k++) {
 				if (k >= centerPos && k < centerPos + progressStrLen) {
@@ -741,7 +742,7 @@ int main(int argc, char* argv[])
 					printf(" ");
 				}
 			}
-			
+
 			// Format ETA
 			char etaStr[32];
 			if (etaMs > 0) {
@@ -756,14 +757,14 @@ int main(int argc, char* argv[])
 			} else {
 				strcpy(etaStr, "ETA: --   ");
 			}
-			
+
 			printf("] %d/%d ms | %.2f/%.2f MB @ %.2f MB/s | %s",
 				   exec_cycle, totalDurationMs, currentMB, totalMB, mbPerSec, etaStr);
 			fflush(stdout);
 		}
 //		if (length == 2) break;
 	}
-	
+
 	// Final progress bar update to ensure 100% is shown
 	printf("\r[");
 	for (int k = 0; k < 50; k++) {
@@ -774,8 +775,8 @@ int main(int argc, char* argv[])
 		}
 	}
 	printf("] %d/%d ms | %.2f/%.2f MB | \tCOMPLETED\n",
-		   totalDurationMs, totalDurationMs, totalMB, totalMB); 
-	
+		   totalDurationMs, totalDurationMs, totalMB, totalMB);
+
 	auto end_time = std::chrono::high_resolution_clock::now();
 	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 	double finalMB = (exec_cycle * bytesPerMs) / (1024.0 * 1024.0);
@@ -935,7 +936,7 @@ NavBit* GetNavData(GnssSystem SatSystem, int SatSignalIndex, NavBit* NavBitArray
 	}
 }
 
-// PocketSDR compatible 2-bit IQ quantization 
+// PocketSDR compatible 2-bit IQ quantization
 // (TODO: Test)
 // (FIXME: Optimize)
  int QuantSamplesIQ2(complex_number Samples[], int Length, unsigned char QuantSamples[], double GainScale)
@@ -1048,14 +1049,14 @@ int QuantSamplesIQ16(complex_number Samples[], int Length, unsigned char QuantSa
 {
     int i;
     int QuantValue;
-    
+
     const double Gain = GainScale * 3277;
     int ClippedCount = 0;
 
     for (i = 0; i < Length; i++)
     {
-        QuantValue = (int)(Samples[i].real * Gain);  
-        if (QuantValue > 32767)  
+        QuantValue = (int)(Samples[i].real * Gain);
+        if (QuantValue > 32767)
         {
             QuantValue = 32767;
             ClippedCount++;
@@ -1065,13 +1066,13 @@ int QuantSamplesIQ16(complex_number Samples[], int Length, unsigned char QuantSa
             QuantValue = -32768;
             ClippedCount++;
         }
-    
-        QuantSamples[i * 4] = (unsigned char)(QuantValue & 0xff);       
-        QuantSamples[i * 4 + 1] = (unsigned char)((QuantValue >> 8) & 0xff);  
 
-      
-        QuantValue = (int)(Samples[i].imag * Gain);  
-        if (QuantValue > 32767)  
+        QuantSamples[i * 4] = (unsigned char)(QuantValue & 0xff);
+        QuantSamples[i * 4 + 1] = (unsigned char)((QuantValue >> 8) & 0xff);
+
+
+        QuantValue = (int)(Samples[i].imag * Gain);
+        if (QuantValue > 32767)
         {
             QuantValue = 32767;
             ClippedCount++;
@@ -1081,9 +1082,9 @@ int QuantSamplesIQ16(complex_number Samples[], int Length, unsigned char QuantSa
             QuantValue = -32768;
             ClippedCount++;
         }
-      
-        QuantSamples[i * 4 + 2] = (unsigned char)(QuantValue & 0xff);        
-        QuantSamples[i * 4 + 3] = (unsigned char)((QuantValue >> 8) & 0xff);  
+
+        QuantSamples[i * 4 + 2] = (unsigned char)(QuantValue & 0xff);
+        QuantSamples[i * 4 + 3] = (unsigned char)((QuantValue >> 8) & 0xff);
     }
 
     return ClippedCount;
@@ -1099,7 +1100,7 @@ void ShowHelp(const char* ProgramPath)
 		ProgramName = PathName;
 	else
 		ProgramName = PathName.substr(pos + 1);
-	
+
 	std::cout << "IFDataGen - GNSS IF Data Generator\n\n";
 	std::cout << "Usage: " << ProgramName << " [options]\n\n";
 	std::cout << "Available options:\n";
@@ -1184,7 +1185,7 @@ void CreateTagFile(const std::string& tagFilePath, const OUTPUT_PARAM& outputPar
 {
     printf("[INFO]\tCreating tag file: %s\n", tagFilePath.c_str());
     FILE* tagFile = fopen(tagFilePath.c_str(), "w");
-    
+
     if (!tagFile) {
         std::cerr << "[WARNING]\tCould not create tag file: " << tagFilePath << std::endl;
         return;
@@ -1194,9 +1195,9 @@ void CreateTagFile(const std::string& tagFilePath, const OUTPUT_PARAM& outputPar
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
-    
+
     struct tm* timeinfo = gmtime(&time_t);  // Use gmtime() instead of localtime()
-    
+
     // Determine format strings
     const char* formatStr;
     const char* iqStr;
@@ -1213,7 +1214,7 @@ void CreateTagFile(const std::string& tagFilePath, const OUTPUT_PARAM& outputPar
     }else if (outputParam.Format == OutputFormatIQ16){
 	formatStr = "INT16X2";
         iqStr = "1";
-        bitsStr = "16"; 
+        bitsStr = "16";
     }else { // OutputFormatIQ8
         formatStr = "INT8X2";
         iqStr = "1";

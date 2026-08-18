@@ -5,8 +5,8 @@
     "time": {
       "type": "UTC",
       "year": 2026,
-      "month": 6,
-      "day": 16,
+      "month": 8,
+      "day": 18,
       "hour": 10,
       "minute": 0,
       "second": 0
@@ -32,7 +32,7 @@
     "trajectoryList": [
       {
         "type": "Const",
-        "time": 600.0
+        "time": 200.0
       }
     ]
   },
