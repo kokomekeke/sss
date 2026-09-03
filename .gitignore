@@ -1,10 +1,119 @@
-.idea/
-.~lock.*#
-build/
-cmake-build-*/
+# ============================================================
+# IFDataGen - Git Ignore File
+# ============================================================
+
+# --------------------------------------------------------------------
+# Build artifacts
+# --------------------------------------------------------------------
 *.o
-*.obj
+*.a
+*.so
+*.dylib
 *.exe
-*.out
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# Build directories
+obj/
+lib/
+build/
+out/
+*.build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# --------------------------------------------------------------------
+# Generated IF data files (.bin)
+# --------------------------------------------------------------------
 *.bin
+*.tag
+*.log
+*.trc
+*.dat
+*.raw
+
+# --------------------------------------------------------------------
+# IDE / Editor files
+# --------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.user
+*.suo
+*.sln
+*.vcxproj*
+*.filters
+
+# --------------------------------------------------------------------
+# OS files
+# --------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --------------------------------------------------------------------
+# Python cache
+# --------------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+
+# --------------------------------------------------------------------
+# Temporary files
+# --------------------------------------------------------------------
+*.tmp
+*.temp
+*.backup
+*.bak
+
+# --------------------------------------------------------------------
+# Documentation (if regenerated)
+# --------------------------------------------------------------------
+*.pdf
+*.html
+
+# --------------------------------------------------------------------
+# RINEX Actualizer specific
+# --------------------------------------------------------------------
+RinexActualizer/build/
+RinexActualizer/out/
+
+# --------------------------------------------------------------------
+# SignalSim specific
+# --------------------------------------------------------------------
+SignalSim/IFdataGen/IFdataGen
+SignalSim/IFdataGen/RinexActualizerApp
+SignalSim/IFdataGen/build.log
+SignalSim/IFdataGen/lib/
+SignalSim/IFdataGen/obj/
+SignalSim/IFdataGen/out/
+
+# --------------------------------------------------------------------
+# EphData - Keep the RINEX files, but ignore any generated files
+# --------------------------------------------------------------------
+SignalSim/EphData/*.tmp
+SignalSim/EphData/*.backup
+SignalSim/EphData/*.old
+
+# --------------------------------------------------------------------
+# Config files - keep examples, ignore user-specific ones
+# --------------------------------------------------------------------
+# If you want to ignore all configs except examples:
+# SignalSim/IFdataGen/configs/*.json
+# !SignalSim/IFdataGen/configs/example.json
+# !SignalSim/IFdataGen/configs/*_test.json
+
+# --------------------------------------------------------------------
+# Python scripts (keep if needed)
+# --------------------------------------------------------------------
+# iq8to16.py - keep this, it's a tool
 *.ods

@@ -1,47 +1,88 @@
-#include "ActualizeRinex.h"
+
+//----------------------------------------------------------------------
+// ActualizeRinex.cpp:
+//   Actualize RINEX ephemeris data to simulation start time
+//
+//   IMPORTANT:
+//
+//   The parser stores GPS_EPHEMERIS.week in the following way:
+//
+//       GPS      -> GPS week
+//       BDS      -> BDS week
+//       Galileo  -> GPS week
+//
+//   See DecodeEphParam():
+//
+//       GPS:      Eph->week = GPS week
+//       BDS:      Eph->week = GPS week - 1356
+//       Galileo:  Eph->week = Galileo week - 1024 = GPS week
+//
+//   Therefore the internal absolute-time representation used here is:
+//
+//       GPS:      week + 0
+//       BDS:      week + 1356
+//       Galileo:  week + 0
+//
+//   The simulation time and RINEX time are converted using the SAME
+//   UTC -> GNSS time convention (currently leap seconds disabled,
+//   because the RINEX parser uses UtcToGpsTime(..., FALSE)).
+//
+//   One constant offset is calculated from the EARLIEST RINEX TOC:
+//
+//       Offset = SimulationStart - EarliestRinexTOC
+//
+//   The same offset is applied to TOC and TOE of every ephemeris.
+//
+//----------------------------------------------------------------------
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <string.h>
+
+#include "ConstVal.h"
+#include "BasicTypes.h"
+#include "GnssTime.h"
 #include "NavData.h"
-#include <cstdint>
-#include <climits>
+#include "ActualizeRinex.h"
 
 
 //----------------------------------------------------------------------
 // Constants
 //----------------------------------------------------------------------
 
-static constexpr long long GPS_WEEK_SECONDS = 604800LL;
-
-static constexpr long long GLO_DAY_SECONDS = 86400LL;
-static constexpr long long GLO_CYCLE_DAYS = 1461LL;
-static constexpr long long GLO_CYCLE_SECONDS =
-    GLO_CYCLE_DAYS * GLO_DAY_SECONDS;
-
-static constexpr int GLO_FRAME_SECONDS = 30;
-static constexpr int GLO_FRAMES_PER_DAY = 2880;
-static constexpr int GLO_TB_SECONDS = 900;
+static const int64_t GPS_WEEK_SECONDS = 604800;
 
 
 //----------------------------------------------------------------------
-// GNSS week epoch handling
-//----------------------------------------------------------------------
+// Convert constellation-specific week representation to an absolute
+// GPS-epoch based second count.
 //
-// Internal absolute time is always represented in GPS epoch.
+// IMPORTANT:
 //
-// GPS:
-//     system week = GPS week
+// GPS_EPHEMERIS.week representation is defined by DecodeEphParam():
 //
-// BDS:
-//     system week = GPS week - 1356
+//   GPS:
+//       Eph->week = GPS week
 //
-// Galileo:
-//     system week = GPS week - 1024
+//   BDS:
+//       Eph->week = GPS week - 1356
+//
+//   Galileo:
+//       Eph->week = Galileo week - 1024
+//                  = GPS week
 //
 // Therefore:
 //
-//     GPS week = system week + offset
+//   GPS      -> +0
+//   BDS      -> +1356
+//   Galileo  -> +0
 //
+// DO NOT use +1024 for Galileo here.
 //----------------------------------------------------------------------
 
-static inline int GetWeekEpochOffset(GnssSystem System)
+static int64_t GetWeekEpochOffset(GnssSystem System)
 {
     switch (System)
     {
@@ -49,7 +90,7 @@ static inline int GetWeekEpochOffset(GnssSystem System)
             return 1356;
 
         case GalileoSystem:
-            return 1024;
+            return 0;
 
         case GpsSystem:
         default:
@@ -59,1054 +100,502 @@ static inline int GetWeekEpochOffset(GnssSystem System)
 
 
 //----------------------------------------------------------------------
-// Convert system-specific week + SOW to absolute GPS seconds.
+// Convert system week + TOW to absolute GPS seconds.
 //----------------------------------------------------------------------
 
-static inline long long SystemTimeToGpsSeconds(
+static int64_t SystemTimeToGpsSeconds(
     GnssSystem System,
     int Week,
     int Seconds)
 {
-    const long long GpsWeek =
-        static_cast<long long>(Week) +
+    const int64_t WeekOffset =
         GetWeekEpochOffset(System);
 
-    return
-        GpsWeek * GPS_WEEK_SECONDS +
-        static_cast<long long>(Seconds);
+    return ((int64_t)Week + WeekOffset) * GPS_WEEK_SECONDS
+         + (int64_t)Seconds;
 }
 
 
 //----------------------------------------------------------------------
-// Split absolute GPS seconds into system-specific week + SOW.
+// Convert absolute GPS seconds back to the representation used by
+// GPS_EPHEMERIS.week.
 //
-// The input is always GPS-epoch based.
-// The output week is converted back to the selected
-// constellation's native epoch.
+// The result is always normalized:
+//
+//       0 <= Seconds < 604800
 //----------------------------------------------------------------------
 
-static inline void SplitSystemTime(
+static void SplitSystemTime(
     GnssSystem System,
-    long long TotalSec,
-    int& Week,
-    int& Sec)
+    int64_t AbsoluteSeconds,
+    int *Week,
+    int *Seconds)
 {
-    long long GpsWeek;
+    const int64_t WeekOffset =
+        GetWeekEpochOffset(System);
 
-    if (TotalSec >= 0)
+    int64_t AbsoluteWeek =
+        AbsoluteSeconds / GPS_WEEK_SECONDS;
+
+    int64_t Tow =
+        AbsoluteSeconds % GPS_WEEK_SECONDS;
+
+    // C/C++ integer division truncates toward zero.
+    // Correct negative values explicitly.
+    if (Tow < 0)
     {
-        GpsWeek =
-            TotalSec / GPS_WEEK_SECONDS;
+        Tow += GPS_WEEK_SECONDS;
+        AbsoluteWeek--;
+    }
+
+    int64_t NativeWeek =
+        AbsoluteWeek - WeekOffset;
+
+    *Week = (int)NativeWeek;
+    *Seconds = (int)Tow;
+}
+
+
+//----------------------------------------------------------------------
+// Convert simulation UTC time to absolute GPS-epoch seconds.
+//
+// IMPORTANT:
+//
+// The RINEX parser uses:
+//
+//       UtcToGpsTime(time, FALSE)
+//
+// Therefore the simulation time must use exactly the same convention.
+//
+// Do NOT change this to TRUE unless the complete signal-generation
+// chain also uses leap-second corrected GPS time.
+//----------------------------------------------------------------------
+
+static int64_t UtcToAbsoluteGpsSeconds(
+    UTC_TIME UtcTime)
+{
+    GNSS_TIME GpsTime =
+        UtcToGpsTime(UtcTime, FALSE);
+
+    return (int64_t)GpsTime.Week * GPS_WEEK_SECONDS
+         + (int64_t)(GpsTime.MilliSeconds / 1000);
+}
+
+
+//----------------------------------------------------------------------
+// Get simulation start time in the week representation used by
+// GPS_EPHEMERIS.
+//
+// GPS:
+//       GPS week
+//
+// BDS:
+//       BDS week
+//
+// Galileo:
+//       GPS week
+//
+// The result is primarily useful for diagnostics.
+//----------------------------------------------------------------------
+
+static void GetSimulationSystemTime(
+    UTC_TIME UtcTime,
+    GnssSystem System,
+    int *Week,
+    int *Seconds)
+{
+    GNSS_TIME Time;
+
+    switch (System)
+    {
+        case BdsSystem:
+            Time = UtcToBdsTime(UtcTime);
+            break;
+
+        case GalileoSystem:
+        case GpsSystem:
+        default:
+            Time = UtcToGpsTime(UtcTime, FALSE);
+            break;
+    }
+
+    *Week =
+        Time.Week;
+
+    *Seconds =
+        Time.MilliSeconds / 1000;
+}
+
+
+//----------------------------------------------------------------------
+// Find the earliest valid RINEX TOC in the ephemeris pool.
+//
+// DO NOT assume Pool[0] is the first RINEX epoch.
+//
+// The ephemeris pool may contain multiple satellites and multiple
+// epochs, and therefore the first array element is not necessarily
+// the earliest time.
+//----------------------------------------------------------------------
+
+static int FindEarliestEphemeris(
+    GnssSystem System,
+    PGPS_EPHEMERIS Pool,
+    int EphemerisNumber)
+{
+    if (Pool == 0 || EphemerisNumber <= 0)
+        return -1;
+
+    int EarliestIndex = -1;
+
+    int64_t EarliestTime = INT64_MAX;
+
+    for (int i = 0; i < EphemerisNumber; i++)
+    {
+        const PGPS_EPHEMERIS Eph =
+            &Pool[i];
+
+        if (Eph->valid == 0)
+            continue;
+
+        const int64_t TocTime =
+            SystemTimeToGpsSeconds(
+                System,
+                Eph->week,
+                Eph->toc);
+
+        if (EarliestIndex < 0 ||
+            TocTime < EarliestTime)
+        {
+            EarliestIndex = i;
+            EarliestTime = TocTime;
+        }
+    }
+
+    return EarliestIndex;
+}
+
+
+//----------------------------------------------------------------------
+// Recalculate derived ephemeris values.
+//
+// The actualization changes TOE and therefore omega_t must be rebuilt.
+//
+// The following quantities do NOT need recalculation because they
+// depend only on the orbital parameters:
+//
+//       axis
+//       n
+//       root_ecc
+//       omega_delta
+//
+//----------------------------------------------------------------------
+
+static void RecalculateDerivedTimeFields(
+    GnssSystem System,
+    PGPS_EPHEMERIS Eph)
+{
+    if (Eph == 0)
+        return;
+
+    if (System == BdsSystem)
+    {
+        Eph->omega_t =
+            Eph->omega0
+            - CGCS2000_OMEGDOTE * Eph->toe;
     }
     else
     {
-        GpsWeek =
-            (TotalSec - (GPS_WEEK_SECONDS - 1)) /
-            GPS_WEEK_SECONDS;
-    }
-
-    Sec = static_cast<int>(
-        TotalSec -
-        GpsWeek * GPS_WEEK_SECONDS
-    );
-
-    Week = static_cast<int>(
-        GpsWeek -
-        GetWeekEpochOffset(System)
-    );
-}
-
-
-//----------------------------------------------------------------------
-// GLONASS tk
-//----------------------------------------------------------------------
-//
-// SignalSim encoding:
-//
-//     tk = ((FrameTime / 120) << 7) +
-//          (FrameTime % 120)
-//
-// FrameTime is:
-//
-//     0 ... 2879
-//
-// One FrameTime unit:
-//
-//     30 seconds
-//
-// Therefore:
-//
-//     0      -> 00:00:00
-//     1      -> 00:00:30
-//     2      -> 00:01:00
-//     ...
-//----------------------------------------------------------------------
-
-static inline int DecodeGlonassFrameTime(
-    unsigned short tk)
-{
-    const int Hour =
-        static_cast<int>(tk >> 7);
-
-    const int Frame =
-        static_cast<int>(tk & 0x7F);
-
-    return
-        Hour * 120 +
-        Frame;
-}
-
-
-//----------------------------------------------------------------------
-// Convert SignalSim tk to seconds within day.
-//----------------------------------------------------------------------
-
-static inline long long GlonassTkToSeconds(
-    unsigned short tk)
-{
-    return
-        static_cast<long long>(
-            DecodeGlonassFrameTime(tk)
-        ) *
-        GLO_FRAME_SECONDS;
-}
-
-
-//----------------------------------------------------------------------
-// Encode 30-second frame time into SignalSim tk.
-//----------------------------------------------------------------------
-
-static inline unsigned short EncodeGlonassTk(
-    int FrameTime)
-{
-    FrameTime %= GLO_FRAMES_PER_DAY;
-
-    if (FrameTime < 0)
-        FrameTime += GLO_FRAMES_PER_DAY;
-
-    return static_cast<unsigned short>(
-        ((FrameTime / 120) << 7) +
-        (FrameTime % 120)
-    );
-}
-
-
-//----------------------------------------------------------------------
-// Normalize GLONASS day + seconds.
-//
-// Day is 1-based:
-//
-//     1 ... 1461
-//
-// Seconds:
-//
-//     0 ... 86399
-//
-// The function handles crossing both ends of the 4-year cycle.
-//----------------------------------------------------------------------
-
-static inline void NormalizeGlonassDayTime(
-    long long& Day,
-    long long& Seconds)
-{
-    while (Seconds < 0)
-    {
-        Seconds += GLO_DAY_SECONDS;
-        --Day;
-    }
-
-    while (Seconds >= GLO_DAY_SECONDS)
-    {
-        Seconds -= GLO_DAY_SECONDS;
-        ++Day;
-    }
-
-    /*
-     * Keep the day in the 1...1461 range.
-     */
-    while (Day < 1)
-        Day += GLO_CYCLE_DAYS;
-
-    while (Day > GLO_CYCLE_DAYS)
-        Day -= GLO_CYCLE_DAYS;
-}
-
-
-//----------------------------------------------------------------------
-// Split cycle-relative GLONASS seconds into:
-//
-//     1-based day
-//     30-second FrameTime
-//
-// Input:
-//
-//     0 ... 1461*86400
-//----------------------------------------------------------------------
-
-static inline void SplitGlonassTime(
-    long long TotalSec,
-    int& Day,
-    int& FrameTime)
-{
-    /*
-     * Normalize the input to one 4-year cycle.
-     */
-    TotalSec %= GLO_CYCLE_SECONDS;
-
-    if (TotalSec < 0)
-        TotalSec += GLO_CYCLE_SECONDS;
-
-
-    /*
-     * 0-based day.
-     */
-    const long long DayNumber =
-        TotalSec / GLO_DAY_SECONDS;
-
-
-    /*
-     * Seconds inside the day.
-     */
-    const long long SecondsOfDay =
-        TotalSec % GLO_DAY_SECONDS;
-
-
-    /*
-     * SignalSim uses 1-based day.
-     */
-    Day =
-        static_cast<int>(DayNumber + 1);
-
-
-    /*
-     * Round to nearest 30-second frame.
-     */
-    FrameTime =
-        static_cast<int>(
-            (SecondsOfDay + GLO_FRAME_SECONDS / 2) /
-            GLO_FRAME_SECONDS
-        );
-
-
-    /*
-     * 23:59:45 ... 23:59:59 rounds to next day.
-     */
-    if (FrameTime >= GLO_FRAMES_PER_DAY)
-    {
-        FrameTime = 0;
-        ++Day;
-
-        if (Day > GLO_CYCLE_DAYS)
-            Day = 1;
+        Eph->omega_t =
+            Eph->omega0
+            - WGS_OMEGDOTE * Eph->toe;
     }
 }
 
 
 //----------------------------------------------------------------------
-// Convert GLONASS_TIME to absolute seconds.
+// Actualize one GNSS constellation.
 //
-// This is SignalSim's internal GLONASS representation.
+// The operation is:
 //
-// LeapYear:
-//     4-year cycle number
+//       Offset = SimulationStart - EarliestRinexTOC
 //
-// Day:
-//     1-based day within cycle
+// For every ephemeris:
 //
-// MilliSeconds:
-//     internal time-of-day
+//       NewTOC = OldTOC + Offset
+//       NewTOE = OldTOE + Offset
 //
-// Note:
+// The absolute representation is used during the calculation so
+// week-boundary crossings are handled correctly.
 //
-// UtcToGlonassTime() adds +3 hours to MilliSeconds.
-// We intentionally use that same representation here so
-// RINEX-derived ephemeris and simulation time use the same
-// time coordinate.
-//----------------------------------------------------------------------
-
-static inline long long GlonassTimeToAbsoluteSeconds(
-    const GLONASS_TIME& Time)
-{
-    return
-        static_cast<long long>(Time.LeapYear) *
-        GLO_CYCLE_SECONDS
-        +
-        static_cast<long long>(Time.Day - 1) *
-        GLO_DAY_SECONDS
-        +
-        static_cast<long long>(Time.MilliSeconds) /
-        1000LL;
-}
-
-
-//----------------------------------------------------------------------
-// Return the signed difference between two times-of-day,
-// wrapped to approximately +/-12 hours.
-//
-// This is used to determine on which day tk belongs relative
-// to tb.
-//
-// Example:
-//
-//     tb = 23:59:00
-//     tk = 00:01:00
-//
-// naive difference:
-//
-//     tk - tb = -23:58:00
-//
-// correct GLONASS day relationship:
-//
-//     +00:02:00
-//----------------------------------------------------------------------
-
-static inline long long GlonassTimeOfDayDifference(
-    long long Time1,
-    long long Time2)
-{
-    long long Difference =
-        Time1 - Time2;
-
-    while (Difference <= -GLO_DAY_SECONDS / 2)
-        Difference += GLO_DAY_SECONDS;
-
-    while (Difference > GLO_DAY_SECONDS / 2)
-        Difference -= GLO_DAY_SECONDS;
-
-    return Difference;
-}
-
-
-//----------------------------------------------------------------------
-// Determine the day of tk from:
-//
-//     tb day
-//     tb seconds
-//     tk seconds
-//
-// tk itself contains no day information.
-//
-// The closest day to tb is selected.
-//----------------------------------------------------------------------
-
-static inline long long GetTkAbsoluteDay(
-    long long TbDay,
-    long long TbSeconds,
-    long long TkSeconds)
-{
-    const long long Difference =
-        GlonassTimeOfDayDifference(
-            TkSeconds,
-            TbSeconds
-        );
-
-    /*
-     * If tk is e.g. 00:05 and tb is 23:55,
-     * tk belongs to the following day.
-     */
-    if (Difference < 0)
-        return TbDay - 1;
-
-    if (TkSeconds < TbSeconds)
-        return TbDay + 1;
-
-    return TbDay;
-}
-
-
-//----------------------------------------------------------------------
-// Main entry point
-//----------------------------------------------------------------------
-
-void ActualizeRinex(
-    UTC_TIME UtcTime,
-    CNavData* NavData,
-    OUTPUT_PARAM OutputParam)
-{
-    if (NavData == nullptr)
-        return;
-
-
-    PGPS_EPHEMERIS Pool = nullptr;
-    PGLONASS_EPHEMERIS GlonassPool = nullptr;
-
-    int Number = 0;
-
-
-    for (int i = GpsSystem;
-         i <= GlonassSystem;
-         ++i)
-    {
-        const GnssSystem System =
-            static_cast<GnssSystem>(i);
-
-
-        if (!OutputParam.FreqSelect[System])
-            continue;
-
-
-        switch (System)
-        {
-            case GpsSystem:
-            case BdsSystem:
-            case GalileoSystem:
-            {
-                Pool =
-                    NavData->GetEphemerisPool(System);
-
-                Number =
-                    NavData->GetEphemerisNumber(System);
-
-
-                ProcessGnssSystem(
-                    UtcTime,
-                    System,
-                    Pool,
-                    Number
-                );
-
-                break;
-            }
-
-
-            case GlonassSystem:
-            {
-                GlonassPool =
-                    NavData->GetGlonassEphemerisPool();
-
-                Number =
-                    NavData->GetGlonassEphemerisNumber();
-
-
-                ProcessGlonassSystem(
-                    UtcTime,
-                    GlonassPool,
-                    Number
-                );
-
-                break;
-            }
-
-
-            case SbasSystem:
-            case QzssSystem:
-            case NavICSystem:
-            default:
-                break;
-        }
-    }
-}
-
-
-//----------------------------------------------------------------------
-// GPS / BDS / Galileo ephemeris actualization
 //----------------------------------------------------------------------
 
 void ProcessGnssSystem(
     UTC_TIME UtcTime,
     GnssSystem System,
     PGPS_EPHEMERIS Pool,
-    int Number)
+    int EphemerisNumber)
 {
-    if (Pool == nullptr || Number <= 0)
+    if (Pool == 0 || EphemerisNumber <= 0)
         return;
 
 
     //------------------------------------------------------------------
-    // Current simulation time.
-    //
-    // UtcToGpsTime() returns GPS week.
-    //
-    // FALSE is intentional here because the absolute time coordinate
-    // used by the ephemeris pool is the GNSS continuous week coordinate.
+    // Simulation start in absolute GPS seconds.
     //------------------------------------------------------------------
 
-    const GNSS_TIME SimGnssTime =
-        UtcToGpsTime(
-            UtcTime,
-            FALSE
-        );
-
-
-    const long long SimTotalSec =
-        static_cast<long long>(
-            SimGnssTime.Week
-        ) * GPS_WEEK_SECONDS
-        +
-        static_cast<long long>(
-            SimGnssTime.MilliSeconds / 1000
-        );
+    const int64_t SimTotalSec =
+        UtcToAbsoluteGpsSeconds(UtcTime);
 
 
     //------------------------------------------------------------------
-    // First ephemeris is the reference.
-    //
-    // IMPORTANT:
-    //
-    // week is interpreted according to System.
+    // Find the EARLIEST valid RINEX ephemeris.
     //------------------------------------------------------------------
+
+    const int FirstIndex =
+        FindEarliestEphemeris(
+            System,
+            Pool,
+            EphemerisNumber);
+
+    if (FirstIndex < 0)
+        return;
+
 
     PGPS_EPHEMERIS First =
-        Pool;
+        &Pool[FirstIndex];
 
 
-    const long long FirstTotalSec =
+    //------------------------------------------------------------------
+    // First RINEX epoch.
+    //
+    // DecodeEphParam() stores the RINEX epoch in Eph->toc.
+    //------------------------------------------------------------------
+
+    const int64_t FirstTotalSec =
         SystemTimeToGpsSeconds(
             System,
             First->week,
-            First->toc
-        );
+            First->toc);
 
 
     //------------------------------------------------------------------
-    // Common time offset.
+    // One constant time offset for the complete constellation.
     //------------------------------------------------------------------
 
-    const long long OffsetSec =
+    const int64_t OffsetSec =
         SimTotalSec - FirstTotalSec;
 
 
     //------------------------------------------------------------------
-    // Actualize every ephemeris.
+    // Apply the offset to every valid ephemeris.
     //------------------------------------------------------------------
 
-    for (PGPS_EPHEMERIS Eph = Pool;
-         Eph < Pool + Number;
-         ++Eph)
+    for (int i = 0; i < EphemerisNumber; i++)
     {
-        //------------------------------------------------------------------
-        // Original TOC.
-        //------------------------------------------------------------------
+        PGPS_EPHEMERIS Eph =
+            &Pool[i];
 
-        const long long OrigTocTotal =
+        if (Eph->valid == 0)
+            continue;
+
+
+        //----------------------------------------------------------------
+        // Original absolute TOC.
+        //----------------------------------------------------------------
+
+        const int64_t OriginalTocTotal =
             SystemTimeToGpsSeconds(
                 System,
                 Eph->week,
-                Eph->toc
-            );
+                Eph->toc);
 
 
-        //------------------------------------------------------------------
-        // Original TOE.
-        //------------------------------------------------------------------
+        //----------------------------------------------------------------
+        // Original absolute TOE.
+        //
+        // TOE belongs to Eph->week in the current structure.
+        //----------------------------------------------------------------
 
-        const long long OrigToeTotal =
+        const int64_t OriginalToeTotal =
             SystemTimeToGpsSeconds(
                 System,
                 Eph->week,
-                Eph->toe
-            );
+                Eph->toe);
 
 
-        //------------------------------------------------------------------
-        // Apply offset.
-        //------------------------------------------------------------------
+        //----------------------------------------------------------------
+        // Shift both times by exactly the same offset.
+        //----------------------------------------------------------------
 
-        const long long NewTocTotal =
-            OrigTocTotal + OffsetSec;
+        const int64_t NewTocTotal =
+            OriginalTocTotal + OffsetSec;
 
-        const long long NewToeTotal =
-            OrigToeTotal + OffsetSec;
+        const int64_t NewToeTotal =
+            OriginalToeTotal + OffsetSec;
 
 
-        //------------------------------------------------------------------
-        // Convert TOC back to system-specific week.
-        //------------------------------------------------------------------
+        //----------------------------------------------------------------
+        // Convert shifted TOC back to constellation representation.
+        //----------------------------------------------------------------
 
-        int NewWeek;
-        int NewToc;
+        int NewTocWeek = 0;
+        int NewToc = 0;
 
         SplitSystemTime(
             System,
             NewTocTotal,
-            NewWeek,
-            NewToc
-        );
+            &NewTocWeek,
+            &NewToc);
 
 
-        //------------------------------------------------------------------
-        // Convert TOE back to system-specific week.
-        //------------------------------------------------------------------
+        //----------------------------------------------------------------
+        // Convert shifted TOE back to constellation representation.
+        //----------------------------------------------------------------
 
-        int NewToeWeek;
-        int NewToe;
+        int NewToeWeek = 0;
+        int NewToe = 0;
 
         SplitSystemTime(
             System,
             NewToeTotal,
-            NewToeWeek,
-            NewToe
-        );
+            &NewToeWeek,
+            &NewToe);
 
 
-        //------------------------------------------------------------------
-        // Store result.
-        //------------------------------------------------------------------
-
-        Eph->week = NewWeek;
-        Eph->toc = NewToc;
-        Eph->toe = NewToe;
-
-
-        //------------------------------------------------------------------
-        // Keep existing SignalSim convention.
+        //----------------------------------------------------------------
+        // IMPORTANT:
         //
-        // If top is intended to represent TOE in this structure,
-        // this is correct.
-        //------------------------------------------------------------------
+        // GPS_EPHEMERIS contains only one week field.
+        //
+        // The ephemeris selection logic uses:
+        //
+        //       Eph->week
+        //       Eph->toe
+        //
+        // Therefore Eph->week must be the week belonging to TOE.
+        //----------------------------------------------------------------
 
-        Eph->top = NewToe;
+        Eph->week =
+            NewToeWeek;
+
+        Eph->toe =
+            NewToe;
+
+        Eph->toc =
+            NewToc;
+
+
+        //----------------------------------------------------------------
+        // DecodeEphParam() currently defines:
+        //
+        //       Eph->top = Eph->toe;
+        //
+        // Keep it synchronized.
+        //----------------------------------------------------------------
+
+        Eph->top =
+            Eph->toe;
+
+
+        //----------------------------------------------------------------
+        // Recalculate time-dependent derived value.
+        //----------------------------------------------------------------
+
+        RecalculateDerivedTimeFields(
+            System,
+            Eph);
     }
 }
 
 
 //----------------------------------------------------------------------
-// GLONASS ephemeris actualization
-//----------------------------------------------------------------------
+// GLONASS
 //
-// IMPORTANT:
+// GLONASS is intentionally not actualized here.
 //
-// GLONASS_EPHEMERIS contains:
+// The current GLONASS_TIME representation does not provide a complete
+// absolute four-year cycle representation, therefore shifting GLONASS
+// ephemerides safely requires additional time information.
 //
-//     day : 1-based day of leap year / 4-year cycle
-//     tb  : seconds within day, 900 s resolution
-//     tk  : time of day, 30 s resolution
-//
-// It does NOT contain LeapYear.
-//
-// Therefore the RINEX ephemeris is associated with a 4-year
-// cycle during actualization.
-//
-// The first ephemeris is used as the temporal reference.
-//
-// The actualization offset is:
-//
-//     simulation_time - first_ephemeris_tb
-//
-// Then the SAME offset is applied to:
-//
-//     tb
-//     tk
-//
-// while preserving their relationship.
+// Do not fake this conversion.
 //----------------------------------------------------------------------
 
 void ProcessGlonassSystem(
     UTC_TIME UtcTime,
-    PGLONASS_EPHEMERIS GlonassPool,
-    int Number)
+    PGLONASS_EPHEMERIS Pool,
+    int EphemerisNumber)
 {
-    if (GlonassPool == nullptr || Number <= 0)
+    (void)UtcTime;
+    (void)Pool;
+    (void)EphemerisNumber;
+}
+
+
+//----------------------------------------------------------------------
+// Public entry point.
+//----------------------------------------------------------------------
+
+void ActualizeRinex(
+    UTC_TIME UtcTime,
+    CNavData *NavData,
+    const OUTPUT_PARAM& OutputParam)
+{
+    if (NavData == 0)
         return;
 
 
     //------------------------------------------------------------------
-    // Current simulation GLONASS time.
+    // GPS
     //------------------------------------------------------------------
 
-    const GLONASS_TIME SimGlo =
-        UtcToGlonassTime(
-            UtcTime
-        );
-
-
-    //------------------------------------------------------------------
-    // Absolute simulation time.
-    //
-    // LeapYear is the 4-year cycle number.
-    // Day is 1-based.
-    //------------------------------------------------------------------
-
-    const long long SimTotalSec =
-        GlonassTimeToAbsoluteSeconds(
-            SimGlo
-        );
-
-
-    //------------------------------------------------------------------
-    // First ephemeris is reference.
-    //------------------------------------------------------------------
-
-    PGLONASS_EPHEMERIS First =
-        GlonassPool;
-
-
-    //------------------------------------------------------------------
-    // First ephemeris tb.
-    //
-    // tb is already in seconds.
-    //
-    // IMPORTANT:
-    //
-    // Do NOT decode tk here.
-    // tb is the reference epoch of the ephemeris.
-    //------------------------------------------------------------------
-
-    const long long FirstTbSeconds =
-        static_cast<long long>(
-            First->tb
-        );
-
-
-    //------------------------------------------------------------------
-    // First ephemeris day.
-    //
-    // day is 1-based.
-    //------------------------------------------------------------------
-
-    const long long FirstDay =
-        static_cast<long long>(
-            First->day
-        );
-
-
-    //------------------------------------------------------------------
-    // We do not have LeapYear in GLONASS_EPHEMERIS.
-    //
-    // Associate the first RINEX ephemeris with the simulation
-    // cycle that makes its day closest to the current simulation
-    // time.
-    //------------------------------------------------------------------
-
-    const long long SimCycle =
-        static_cast<long long>(
-            SimGlo.LeapYear
-        );
-
-
-    const long long SimAbsoluteDay =
-        SimCycle * GLO_CYCLE_DAYS
-        +
-        static_cast<long long>(
-            SimGlo.Day - 1
-        );
-
-
-    long long FirstCycle =
-        SimCycle;
-
-    long long BestDayDifference =
-        LLONG_MAX;
-
-
-    for (int Delta = -2;
-         Delta <= 2;
-         ++Delta)
+    if (OutputParam.FreqSelect[GpsSystem] != 0)
     {
-        const long long CandidateCycle =
-            SimCycle + Delta;
-
-
-        const long long CandidateAbsoluteDay =
-            CandidateCycle * GLO_CYCLE_DAYS
-            +
-            (FirstDay - 1);
-
-
-        const long long Difference =
-            CandidateAbsoluteDay -
-            SimAbsoluteDay;
-
-
-        const long long AbsDifference =
-            Difference >= 0
-                ? Difference
-                : -Difference;
-
-
-        if (AbsDifference < BestDayDifference)
-        {
-            BestDayDifference =
-                AbsDifference;
-
-            FirstCycle =
-                CandidateCycle;
-        }
+        ProcessGnssSystem(
+            UtcTime,
+            GpsSystem,
+            NavData->GetEphemerisPool(GpsSystem),
+            NavData->GetEphemerisNumber(GpsSystem));
     }
 
 
     //------------------------------------------------------------------
-    // Absolute tb of first ephemeris.
+    // BDS
     //------------------------------------------------------------------
 
-    const long long FirstTbTotalSec =
-        FirstCycle * GLO_CYCLE_SECONDS
-        +
-        (FirstDay - 1) * GLO_DAY_SECONDS
-        +
-        FirstTbSeconds;
-
-
-    //------------------------------------------------------------------
-    // Common actualization offset.
-    //------------------------------------------------------------------
-
-    const long long OffsetSec =
-        SimTotalSec -
-        FirstTbTotalSec;
-
-
-    //------------------------------------------------------------------
-    // Actualize each GLONASS ephemeris.
-    //------------------------------------------------------------------
-
-    for (PGLONASS_EPHEMERIS Eph = GlonassPool;
-         Eph < GlonassPool + Number;
-         ++Eph)
+    if (OutputParam.FreqSelect[BdsSystem] != 0)
     {
-        //------------------------------------------------------------------
-        // Original tb.
-        //------------------------------------------------------------------
-
-        const long long OrigTbSeconds =
-            static_cast<long long>(
-                Eph->tb
-            );
-
-
-        //------------------------------------------------------------------
-        // Determine cycle/day of this ephemeris.
-        //
-        // All ephemerides in this RINEX pool are initially interpreted
-        // in the same cycle as the first ephemeris.
-        //------------------------------------------------------------------
-
-        const long long OrigTbTotalSec =
-            FirstCycle * GLO_CYCLE_SECONDS
-            +
-            static_cast<long long>(
-                Eph->day - 1
-            ) * GLO_DAY_SECONDS
-            +
-            OrigTbSeconds;
-
-
-        //------------------------------------------------------------------
-        // New tb absolute time.
-        //------------------------------------------------------------------
-
-        const long long NewTbTotalSec =
-            OrigTbTotalSec +
-            OffsetSec;
-
-
-        //------------------------------------------------------------------
-        // Convert new absolute tb to cycle-relative coordinates.
-        //------------------------------------------------------------------
-
-        long long NewCycle =
-            NewTbTotalSec /
-            GLO_CYCLE_SECONDS;
-
-        long long CycleRelativeSec =
-            NewTbTotalSec %
-            GLO_CYCLE_SECONDS;
-
-
-        if (CycleRelativeSec < 0)
-        {
-            CycleRelativeSec +=
-                GLO_CYCLE_SECONDS;
-
-            --NewCycle;
-        }
-
-
-        //------------------------------------------------------------------
-        // Split into new day + seconds-of-day.
-        //------------------------------------------------------------------
-
-        const long long NewDayZeroBased =
-            CycleRelativeSec /
-            GLO_DAY_SECONDS;
-
-
-        const long long NewTbSeconds =
-            CycleRelativeSec %
-            GLO_DAY_SECONDS;
-
-
-        const unsigned short NewDay =
-            static_cast<unsigned short>(
-                NewDayZeroBased + 1
-            );
-
-
-        //------------------------------------------------------------------
-        // tb has 900-second resolution.
-        //
-        // This matches DecodeEphOrbit():
-        //
-        //     ((Milliseconds + 450000) / 900000) * 900
-        //------------------------------------------------------------------
-
-        unsigned int NewTb =
-            static_cast<unsigned int>(
-                (
-                    NewTbSeconds +
-                    GLO_TB_SECONDS / 2
-                )
-                / GLO_TB_SECONDS
-                * GLO_TB_SECONDS
-            );
-
-
-        //------------------------------------------------------------------
-        // Rounding can push tb to exactly 86400.
-        //
-        // Move it to the next day.
-        //------------------------------------------------------------------
-
-        long long TbDay =
-            static_cast<long long>(
-                NewDay
-            );
-
-
-        if (NewTb >= GLO_DAY_SECONDS)
-        {
-            NewTb = 0;
-            ++TbDay;
-
-
-            if (TbDay > GLO_CYCLE_DAYS)
-                TbDay = 1;
-        }
-
-
-        Eph->day =
-            static_cast<unsigned short>(
-                TbDay
-            );
-
-        Eph->tb =
-            NewTb;
-
-
-        //------------------------------------------------------------------
-        // tk
-        //
-        // tk is NOT tb.
-        //
-        // It is a separate 30-second time-of-day value.
-        //------------------------------------------------------------------
-
-        const long long OrigTkSeconds =
-            GlonassTkToSeconds(
-                Eph->tk
-            );
-
-
-        //------------------------------------------------------------------
-        // Determine which day the original tk belongs to relative
-        // to the ephemeris tb.
-        //
-        // tk has no day field.
-        //
-        // We choose the day nearest to tb.
-        //------------------------------------------------------------------
-
-        const long long TbDayForTk =
-            static_cast<long long>(
-                Eph->day
-            );
-
-
-        const long long TkDay =
-            GetTkAbsoluteDay(
-                TbDayForTk,
-                NewTb,
-                OrigTkSeconds
-            );
-
-
-        //------------------------------------------------------------------
-        // Absolute tk before actualization.
-        //------------------------------------------------------------------
-
-        long long TkTotalSec =
-            NewCycle * GLO_CYCLE_SECONDS
-            +
-            (TkDay - 1) * GLO_DAY_SECONDS
-            +
-            OrigTkSeconds;
-
-
-        //------------------------------------------------------------------
-        // Apply the same actualization offset.
-        //------------------------------------------------------------------
-
-        TkTotalSec += OffsetSec;
-
-
-        //------------------------------------------------------------------
-        // Convert tk back into cycle/day/time-of-day.
-        //------------------------------------------------------------------
-
-        long long TkCycle =
-            TkTotalSec /
-            GLO_CYCLE_SECONDS;
-
-        long long TkCycleSec =
-            TkTotalSec %
-            GLO_CYCLE_SECONDS;
-
-
-        if (TkCycleSec < 0)
-        {
-            TkCycleSec +=
-                GLO_CYCLE_SECONDS;
-
-            --TkCycle;
-        }
-
-
-        //------------------------------------------------------------------
-        // Extract tk day and seconds-of-day.
-        //------------------------------------------------------------------
-
-        long long TkDayZeroBased =
-            TkCycleSec /
-            GLO_DAY_SECONDS;
-
-
-        long long NewTkSeconds =
-            TkCycleSec %
-            GLO_DAY_SECONDS;
-
-
-        int NewFrameTime =
-            static_cast<int>(
-                (
-                    NewTkSeconds +
-                    GLO_FRAME_SECONDS / 2
-                )
-                / GLO_FRAME_SECONDS
-            );
-
-
-        //------------------------------------------------------------------
-        // Handle 23:59:45 rounding.
-        //------------------------------------------------------------------
-
-        if (NewFrameTime >= GLO_FRAMES_PER_DAY)
-        {
-            NewFrameTime = 0;
-
-            ++TkDayZeroBased;
-
-            if (TkDayZeroBased >= GLO_CYCLE_DAYS)
-                TkDayZeroBased = 0;
-        }
-
-
-        //------------------------------------------------------------------
-        // Encode new tk.
-        //------------------------------------------------------------------
-
-        Eph->tk =
-            EncodeGlonassTk(
-                NewFrameTime
-            );
+        ProcessGnssSystem(
+            UtcTime,
+            BdsSystem,
+            NavData->GetEphemerisPool(BdsSystem),
+            NavData->GetEphemerisNumber(BdsSystem));
+    }
+
+
+    //------------------------------------------------------------------
+    // Galileo
+    //------------------------------------------------------------------
+
+    if (OutputParam.FreqSelect[GalileoSystem] != 0)
+    {
+        ProcessGnssSystem(
+            UtcTime,
+            GalileoSystem,
+            NavData->GetEphemerisPool(GalileoSystem),
+            NavData->GetEphemerisNumber(GalileoSystem));
+    }
+
+
+    //------------------------------------------------------------------
+    // GLONASS
+    //------------------------------------------------------------------
+
+    if (OutputParam.FreqSelect[GlonassSystem] != 0)
+    {
+        ProcessGlonassSystem(
+            UtcTime,
+            NavData->GetGlonassEphemerisPool(),
+            NavData->GetGlonassEphemerisNumber());
     }
 }
+

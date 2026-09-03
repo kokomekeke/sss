@@ -77,6 +77,7 @@ const char *SignalName[][8] = {
 
 int main(int argc, char* argv[])
 {
+    printf("DEBUG: MAIN STARTED\n");
 	int i, j;
 	JsonStream JsonTree;
 	JsonObject *Object;
@@ -140,7 +141,14 @@ int main(int argc, char* argv[])
 	AssignParameters(Object, &UtcTime, &StartPos, &StartVel, &Trajectory, &NavData, &OutputParam, &PowerControl, NULL);
 
     //AssignParameters besettelte az UTCTimeot UTC formatumban, es ezutan kell meghivni az aktualizatort
-    printf("Start time of the simulation: %s\n", UtcTime);
+    printf("Start time of the simulation: %04d-%02d-%02d %02d:%02d:%02d:%02d UTC\n",
+           UtcTime.Year,
+           UtcTime.Month,
+           UtcTime.Day,
+           UtcTime.Hour,
+           UtcTime.Minute,
+           (int)UtcTime.Second,
+           UtcTime.Second);
 
     ActualizeRinex(UtcTime, &NavData, OutputParam);
 
@@ -165,12 +173,60 @@ int main(int argc, char* argv[])
 	}*/
 
 	// initial variables
- 	Trajectory.ResetTrajectoryTime();
-	CurTime = UtcToGpsTime(UtcTime);
-	GlonassTime = UtcToGlonassTime(UtcTime);
-	BdsTime = UtcToBdsTime(UtcTime);
-	CurPos = LlaToEcef(StartPos);
-	SpeedLocalToEcef(StartPos, StartVel, CurPos);
+    Trajectory.ResetTrajectoryTime();
+    CurTime = UtcToGpsTime(UtcTime);
+    GlonassTime = UtcToGlonassTime(UtcTime);
+    BdsTime = UtcToBdsTime(UtcTime);
+    CurPos = LlaToEcef(StartPos);
+    SpeedLocalToEcef(StartPos, StartVel, CurPos);
+
+    //===================================================================
+    // DEBUG: Ephemeris Actualization Verification
+    //===================================================================
+    printf("\n============================================================\n");
+    printf("EPHEMERIS ACTUALIZATION DEBUG\n");
+    printf("============================================================\n");
+    printf("Simulation Time: %04d-%02d-%02d %02d:%02d:%06.3f UTC\n",
+           UtcTime.Year, UtcTime.Month, UtcTime.Day,
+           UtcTime.Hour, UtcTime.Minute, UtcTime.Second);
+    printf("GPS Week: %d, TOW: %d ms\n", CurTime.Week, CurTime.MilliSeconds);
+    printf("------------------------------------------------------------\n");
+
+    // Direct access to the ephemeris pool (using the correct method names)
+    PGPS_EPHEMERIS GpsPool = NavData.GetEphemerisPool(GpsSystem);
+    int GpsCount = NavData.GetEphemerisNumber(GpsSystem);
+
+    printf("Total GPS Ephemerides in pool: %d\n", GpsCount);
+    printf("+------+-------+---------+---------+-------+----------+\n");
+    printf("|  SV  | Week  |   Toe   |   Toc   | IODE  | Valid    |\n");
+    printf("+------+-------+---------+---------+-------+----------+\n");
+
+    int validCount = 0;
+    for (int i = 0; i < GpsCount; i++) {
+        PGPS_EPHEMERIS Eph = &GpsPool[i];
+        if (Eph->valid) {
+            validCount++;
+            printf("| %02d   | %5d | %7d | %7d | %5d | YES      |\n",
+                   Eph->svid, Eph->week, Eph->toe, Eph->toc, Eph->iode);
+        }
+    }
+    printf("+------+-------+---------+---------+-------+----------+\n");
+    printf("Valid ephemerides: %d / %d\n", validCount, GpsCount);
+
+    // Check what FindEphemeris returns for each satellite
+    printf("\nFindEphemeris() results (selected ephemerides):\n");
+    printf("+------+-------+---------+---------+-------+\n");
+    printf("|  SV  | Week  |   Toe   |   Toc   | IODE  |\n");
+    printf("+------+-------+---------+---------+-------+\n");
+    for (int i = 1; i <= TOTAL_GPS_SAT; i++) {
+        PGPS_EPHEMERIS Eph = NavData.FindEphemeris(GpsSystem, CurTime, i);
+        if (Eph && Eph->valid) {
+            printf("| %02d   | %5d | %7d | %7d | %5d |\n",
+                   i, Eph->week, Eph->toe, Eph->toc, Eph->iode);
+        }
+    }
+    printf("+------+-------+---------+---------+-------+\n");
+    printf("============================================================\n\n");
 
 	if (!Arguments.ValidateOnly)
 	{
@@ -352,7 +408,7 @@ int main(int argc, char* argv[])
 
 	ListCount = PowerControl.GetPowerControlList(0, PowerList);
 	UpdateSatParamList(CurTime, CurPos, ListCount, PowerList, NavData.GetGpsIono());
-    UpdateSatParamList(CurTime, CurPos, ListCount, PowerList, NavData.GetGpsIono());
+//    UpdateSatParamList(CurTime, CurPos, ListCount, PowerList, NavData.GetGpsIono());
 
     // DEBUG PRINT
     printf("\nDEBUG CurPos: x=%.0f y=%.0f z=%.0f\n", CurPos.x, CurPos.y, CurPos.z);
@@ -456,6 +512,7 @@ int main(int argc, char* argv[])
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
 		printf("| SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) | SV | Doppler (Hz) |\n");
 		printf("+----+--------------+----+--------------+----+--------------+----+--------------+\n");
+
 		int svCount = 0;
 		for (i = 0; i < GpsSatNumber; i++)
 		{

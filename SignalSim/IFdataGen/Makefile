@@ -153,6 +153,7 @@ SIGNALSIM_SOURCES = \
     $(SRCDIR)/ComplexNumber.cpp \
     $(SRCDIR)/Coordinate.cpp \
     $(SRCDIR)/D1D2NavBit.cpp \
+    $(SRCDIR)/DelayModel.cpp \
     $(SRCDIR)/FNavBit.cpp \
     $(SRCDIR)/GNavBit.cpp \
     $(SRCDIR)/GnssTime.cpp \
@@ -172,6 +173,7 @@ SIGNALSIM_SOURCES = \
     $(SRCDIR)/XmlArguments.cpp \
     $(SRCDIR)/XmlElement.cpp \
     $(SRCDIR)/XmlInterpreter.cpp \
+    $(SRCDIR)/MessageOutput.cpp \
     $(SRCDIR)/FastMath.cpp
 
 

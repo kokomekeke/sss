@@ -263,7 +263,7 @@ PGPS_EPHEMERIS CNavData::FindEphemeris(GnssSystem system, GNSS_TIME time, int sv
 	{
 		EphemerisPool = GalileoEphemerisPool;
 		EphemerisNumber = GalileoEphemerisNumber;
-		Week -= 1024;
+//		Week -= 1024;
 	}
 	else
 		return (PGPS_EPHEMERIS)0;

@@ -444,6 +444,7 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 			Eph->delta_n_dot = 0.0;
 			Eph->iodc = (unsigned short)data[26];      /* IODC */
 			Eph->iode = (unsigned char)data[3];      /* IODE/AODE */
+			// actualizer should override this asw
 			Eph->week = (int)data[21];      /* week number */
 			Eph->health = (unsigned short)data[24];      /* sv health */
 			Eph->ura = GetUraIndex(data[23]);
@@ -498,7 +499,8 @@ BOOL DecodeEphParam(NavDataType DataType, char *str, FILE *fp_nav, PGPS_EPHEMERI
 			Eph->delta_n_dot = 0.0;
 			Eph->iodc = (unsigned short)data[3];      /* IOD */
 			Eph->iode = (unsigned char)data[3];      /* IODE/AODE */
-			Eph->week = (int)data[21] - 1024;      /* week number  !! this is GPS week while RINEX document stated this as GAL Week# */
+//			Eph->week = (int)data[21] - 1024;      /* week number  !! this is GPS week while RINEX document stated this as GAL Week# */
+			Eph->week = (int)data[21];
 			Eph->health = (unsigned short)data[24];      /* sv health */
 			Eph->ura = GetGalileoUra(data[23]);
 			Eph->flag = (unsigned short)data[20];

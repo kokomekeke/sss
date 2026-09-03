@@ -184,7 +184,8 @@ BOOL AssignStartTime(JsonObject *Object, UTC_TIME &UtcTime)
 		GnssTime.SubMilliSeconds = UtcTime.Second * 1000;
 		GnssTime.MilliSeconds = (int)GnssTime.SubMilliSeconds;
 		GnssTime.SubMilliSeconds -= GnssTime.MilliSeconds;
-		UtcTime = GpsTimeToUtc(GnssTime);
+        printf("DEBUG AssignStartTime: Week=%d, MilliSeconds=%d, SubMilliSeconds=%.3f\n",
+           GnssTime.Week, GnssTime.MilliSeconds, GnssTime.SubMilliSeconds);		UtcTime = GpsTimeToUtc(GnssTime);
 		break;
 	case 2:	// BDS Time
 		GnssTime.Week = Week;
@@ -632,9 +633,9 @@ BOOL SetPowerControl(JsonObject *Object, CPowerControl &PowerControl)
 				case 5:	// "value"
 					switch (unit)
 					{
-					case 0: PowerControl.InitCN0 = GET_DOUBLE_VALUE(PowerObject); break;
-					case 1: PowerControl.InitCN0 = GET_DOUBLE_VALUE(PowerObject) - PowerControl.NoiseFloor; break;
-					case 2: PowerControl.InitCN0 = GET_DOUBLE_VALUE(PowerObject) - PowerControl.NoiseFloor + 30; break;
+                        case 0: PowerControl.InitCN0 = GET_DOUBLE_VALUE(PowerObject); break;
+                        case 1: PowerControl.InitCN0 = GET_DOUBLE_VALUE(PowerObject) - PowerControl.NoiseFloor; break;
+                        case 2: PowerControl.InitCN0 = GET_DOUBLE_VALUE(PowerObject) - PowerControl.NoiseFloor + 30; break;
 					}
 					break;
 				}
