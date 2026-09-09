@@ -743,6 +743,11 @@ int main(int argc, char* argv[])
 		if ((exec_cycle % 100) == 0)
 		{
 			double ClippingRate = (double)TotalClippedSamples / TotalSamples;
+			printf("[AGC] cycle=%d gain_before=%.6f clipping=%.4f%%\n",
+               exec_cycle,
+               AGCGain,
+               ClippingRate * 100.0);
+
 			if (ClippingRate > 0.01) // clipped rate over 1%
 			{
 				AGCGain *= 0.95; // reduce gain by 5%
@@ -1108,6 +1113,7 @@ int QuantSamplesIQ16(complex_number Samples[], int Length, unsigned char QuantSa
     int QuantValue;
 
     const double Gain = GainScale * 3277;
+    printf("gain: %.3f", Gain);
     int ClippedCount = 0;
 
     for (i = 0; i < Length; i++)
