@@ -178,30 +178,30 @@ BOOL AssignStartTime(JsonObject *Object, UTC_TIME &UtcTime)
 
 	switch (Type)
 	{
-	case 1:	// GPS Time
-	case 3:	// Galileo Time
-		GnssTime.Week = Week + (Type == 3) ? 1024 : 0;
-		GnssTime.SubMilliSeconds = UtcTime.Second * 1000;
-		GnssTime.MilliSeconds = (int)GnssTime.SubMilliSeconds;
-		GnssTime.SubMilliSeconds -= GnssTime.MilliSeconds;
-        printf("DEBUG AssignStartTime: Week=%d, MilliSeconds=%d, SubMilliSeconds=%.3f\n",
-           GnssTime.Week, GnssTime.MilliSeconds, GnssTime.SubMilliSeconds);		UtcTime = GpsTimeToUtc(GnssTime);
-		break;
-	case 2:	// BDS Time
-		GnssTime.Week = Week;
-		GnssTime.SubMilliSeconds = UtcTime.Second * 1000;
-		GnssTime.MilliSeconds = (int)GnssTime.SubMilliSeconds;
-		GnssTime.SubMilliSeconds -= GnssTime.MilliSeconds;
-		UtcTime = BdsTimeToUtc(GnssTime);
-		break;
-	case 4:	// GLONASS Time
-		GlonassTime.LeapYear = LeapYear;
-		GlonassTime.Day = UtcTime.Day;
-		GlonassTime.SubMilliSeconds = UtcTime.Second * 1000;
-		GlonassTime.MilliSeconds = (int)GlonassTime.SubMilliSeconds;
-		GlonassTime.SubMilliSeconds -= GlonassTime.MilliSeconds;
-		UtcTime = GlonassTimeToUtc(GlonassTime);
-		break;
+        case 1:	// GPS Time
+        case 3:	// Galileo Time
+            GnssTime.Week = Week + (Type == 3) ? 1024 : 0;
+            GnssTime.SubMilliSeconds = UtcTime.Second * 1000;
+            GnssTime.MilliSeconds = (int)GnssTime.SubMilliSeconds;
+            GnssTime.SubMilliSeconds -= GnssTime.MilliSeconds;
+            printf("DEBUG AssignStartTime: Week=%d, MilliSeconds=%d, SubMilliSeconds=%.3f\n",
+               GnssTime.Week, GnssTime.MilliSeconds, GnssTime.SubMilliSeconds);		UtcTime = GpsTimeToUtc(GnssTime);
+            break;
+        case 2:	// BDS Time
+            GnssTime.Week = Week;
+            GnssTime.SubMilliSeconds = UtcTime.Second * 1000;
+            GnssTime.MilliSeconds = (int)GnssTime.SubMilliSeconds;
+            GnssTime.SubMilliSeconds -= GnssTime.MilliSeconds;
+            UtcTime = BdsTimeToUtc(GnssTime);
+            break;
+        case 4:	// GLONASS Time
+            GlonassTime.LeapYear = LeapYear;
+            GlonassTime.Day = UtcTime.Day;
+            GlonassTime.SubMilliSeconds = UtcTime.Second * 1000;
+            GlonassTime.MilliSeconds = (int)GlonassTime.SubMilliSeconds;
+            GlonassTime.SubMilliSeconds -= GlonassTime.MilliSeconds;
+            UtcTime = GlonassTimeToUtc(GlonassTime);
+            break;
 	}
 
 	return TRUE;

@@ -1,4 +1,3 @@
-
 //----------------------------------------------------------------------
 // ActualizeRinex.cpp:
 //   Actualize RINEX ephemeris data to simulation start time
@@ -19,9 +18,25 @@
 //
 //   Therefore the internal absolute-time representation used here is:
 //
-//       GPS:      week + 0
-//       BDS:      week + 1356
-//       Galileo:  week + 0
+//       GPS:      week + 0            (seconds unchanged)
+//       BDS:      week + 1356         (seconds + 14, see below)
+//       Galileo:  week + 0            (seconds unchanged)
+//
+//   BDS TIME SCALE OFFSET:
+//
+//   BDT (BeiDou Time) is not just GPST shifted by 1356 weeks - it is
+//   also offset by a constant 14 seconds, because BDT was zeroed at
+//   UTC 2006-01-01 00:00:00, at which point GPST already carried a
+//   14-second accumulated leap-second lead over UTC:
+//
+//       GPST_seconds = BDT_seconds + 1356*604800 + 14
+//
+//   (see UtcToBdsTime() / BdsTimeToUtc() in GnssTime.cpp, which apply
+//   exactly this 14000 ms correction). Any code that maps between the
+//   BDS native (week, toc/toe) representation and an absolute
+//   GPS-epoch second count MUST include this 14-second term, or every
+//   BDS ephemeris will be actualized 14 seconds off from the intended
+//   simulation start time.
 //
 //   The simulation time and RINEX time are converted using the SAME
 //   UTC -> GNSS time convention (currently leap seconds disabled,
@@ -53,6 +68,10 @@
 //----------------------------------------------------------------------
 
 static const int64_t GPS_WEEK_SECONDS = 604800;
+
+// Constant BDT -> GPST second offset (see header comment above and
+// UtcToBdsTime()/BdsTimeToUtc() in GnssTime.cpp).
+static const int64_t BDS_GPS_SECOND_OFFSET = 14;
 
 
 //----------------------------------------------------------------------
@@ -100,6 +119,37 @@ static int64_t GetWeekEpochOffset(GnssSystem System)
 
 
 //----------------------------------------------------------------------
+// Constant second-scale offset between the constellation's native time
+// scale and GPST, on top of the whole-week offset above.
+//
+// GPS:
+//       GPST is the reference scale itself -> 0
+//
+// BDS:
+//       GPST_seconds = BDT_seconds + 1356*604800 + 14
+//       -> +14
+//
+// Galileo:
+//       GST tracks GPST with no constant second offset (sub-us level
+//       steering only, not modeled here) -> 0
+//----------------------------------------------------------------------
+
+static int64_t GetSecondEpochOffset(GnssSystem System)
+{
+    switch (System)
+    {
+        case BdsSystem:
+            return BDS_GPS_SECOND_OFFSET;
+
+        case GalileoSystem:
+        case GpsSystem:
+        default:
+            return 0;
+    }
+}
+
+
+//----------------------------------------------------------------------
 // Convert system week + TOW to absolute GPS seconds.
 //----------------------------------------------------------------------
 
@@ -111,8 +161,12 @@ static int64_t SystemTimeToGpsSeconds(
     const int64_t WeekOffset =
         GetWeekEpochOffset(System);
 
+    const int64_t SecondOffset =
+        GetSecondEpochOffset(System);
+
     return ((int64_t)Week + WeekOffset) * GPS_WEEK_SECONDS
-         + (int64_t)Seconds;
+         + (int64_t)Seconds
+         + SecondOffset;
 }
 
 
@@ -134,11 +188,20 @@ static void SplitSystemTime(
     const int64_t WeekOffset =
         GetWeekEpochOffset(System);
 
+    const int64_t SecondOffset =
+        GetSecondEpochOffset(System);
+
+    // Remove the constant native-scale-to-GPST second offset (e.g. the
+    // 14 s BDT/GPST difference) before splitting into week + TOW on
+    // the native scale.
+    const int64_t AdjustedSeconds =
+        AbsoluteSeconds - SecondOffset;
+
     int64_t AbsoluteWeek =
-        AbsoluteSeconds / GPS_WEEK_SECONDS;
+        AdjustedSeconds / GPS_WEEK_SECONDS;
 
     int64_t Tow =
-        AbsoluteSeconds % GPS_WEEK_SECONDS;
+        AdjustedSeconds % GPS_WEEK_SECONDS;
 
     // C/C++ integer division truncates toward zero.
     // Correct negative values explicitly.
@@ -325,7 +388,8 @@ static void RecalculateDerivedTimeFields(
 //       NewTOE = OldTOE + Offset
 //
 // The absolute representation is used during the calculation so
-// week-boundary crossings are handled correctly.
+// week-boundary crossings (and, for BDS, the constant 14 s BDT/GPST
+// scale offset) are handled correctly.
 //
 //----------------------------------------------------------------------
 
@@ -598,4 +662,3 @@ void ActualizeRinex(
             NavData->GetGlonassEphemerisNumber());
     }
 }
-
