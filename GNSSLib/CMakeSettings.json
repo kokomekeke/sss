@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "name": "x64-Debug",
+            "generator": "Ninja",
+            "configurationType": "Debug",
+            "inheritEnvironments": [ "msvc_x64_x64" ],
+            "buildRoot": "${projectDir}\\out\\build\\${name}",
+            "installRoot": "${projectDir}\\out\\install\\${name}",
+            "cmakeCommandArgs": "-DGNSSLIB_BUILD_SHARED=ON -DGNSSLIB_BUILD_STATIC=ON -DGNSSLIB_BUILD_EXAMPLES=ON -DGNSSLIB_BUILD_TOOLS=ON -DUSE_NATIVE_OPT=OFF",
+            "buildCommandArgs": "",
+            "ctestCommandArgs": "",
+            "variables": [
+                {
+                    "name": "CMAKE_CXX_STANDARD",
+                    "value": "20",
+                    "type": "STRING"
+                }
+            ]
+        },
+        {
+            "name": "x64-Release",
+            "generator": "Ninja",
+            "configurationType": "RelWithDebInfo",
+            "buildRoot": "${projectDir}\\out\\build\\${name}",
+            "installRoot": "${projectDir}\\out\\install\\${name}",
+            "cmakeCommandArgs": "-DGNSSLIB_BUILD_SHARED=ON -DGNSSLIB_BUILD_STATIC=ON -DGNSSLIB_BUILD_EXAMPLES=ON -DGNSSLIB_BUILD_TOOLS=ON -DUSE_NATIVE_OPT=ON",
+            "buildCommandArgs": "",
+            "ctestCommandArgs": "",
+            "inheritEnvironments": [ "msvc_x64_x64" ]
+        },
+        {
+            "name": "x64-Release-AVX2-Off",
+            "generator": "Ninja",
+            "configurationType": "RelWithDebInfo",
+            "buildRoot": "${projectDir}\\out\\build\\${name}",
+            "installRoot": "${projectDir}\\out\\install\\${name}",
+            "cmakeCommandArgs": "-DGNSSLIB_BUILD_SHARED=ON -DGNSSLIB_BUILD_STATIC=ON -DGNSSLIB_BUILD_EXAMPLES=ON -DGNSSLIB_BUILD_TOOLS=ON -DUSE_NATIVE_OPT=OFF",
+            "buildCommandArgs": "",
+            "ctestCommandArgs": "",
+            "inheritEnvironments": [ "msvc_x64_x64" ]
+        }
+    ]
+}

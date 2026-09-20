@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
+# Sisi/SignalSim/IFdataGen/CMakeLists.txt
+
 project(SisiGnssTools LANGUAGES C CXX)
 
 # ============================================================================
@@ -31,7 +33,11 @@ set(RINEX_ACTUALIZER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../RinexActualizer")
 # OpenMP
 # ============================================================================
 
-find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    message(STATUS "OpenMP: ENABLED")
+else()
+    message(WARNING "OpenMP not found - building without OpenMP")
+endif()
 
 # ============================================================================
 # SignalSim sources
@@ -91,14 +97,51 @@ endif()
 
 # ============================================================================
 # IPO / LTO
+#
+# Csak Release / RelWithDebInfo alatt kapcsoljuk be - Debug alatt csak
+# lassítaná a buildet és rontaná a debugolhatóságot (ez MSVC alatt is igaz).
 # ============================================================================
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT IPO_OK OUTPUT IPO_ERR)
 
 if(IPO_OK)
-    set_property(TARGET IFdataGen PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-    set_property(TARGET RinexActualizer PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    foreach(TGT IFdataGen RinexActualizer)
+        set_property(TARGET ${TGT} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+        set_property(TARGET ${TGT} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
+    endforeach()
+endif()
+
+# ============================================================================
+# Windows / MSVC specifikus beállítások
+#
+# - /EHsc            : szabványos C++ kivételkezelés bekapcsolása (enélkül
+#                       az MSVC alapból nem garantálja a helyes kivétel-
+#                       terjedést és warningokat/hibákat dobhat)
+# - /utf-8            : a forrás UTF-8 (a kommentek/stringek között magyar
+#                       ékezetes karakterek is vannak) - GCC/Clang alatt ez
+#                       alapértelmezett, MSVC alatt explicit kérni kell
+# - _USE_MATH_DEFINES : M_PI és társai csak ezzel érhetők el <cmath> alól
+#                       MSVC alatt (GCC/Clang alatt nem szükséges)
+# - NOMINMAX,
+#   WIN32_LEAN_AND_MEAN : ha valamelyik header lánc <windows.h>-t húzna be,
+#                       ezek nélkül a min()/max() makrók összeakadhatnak a
+#                       std::min/std::max-al
+# - _CRT_SECURE_NO_WARNINGS : a klasszikus C-függvények (sprintf, fopen stb.)
+#                       MSVC "biztonsági" figyelmeztetéseinek elnémítása,
+#                       hogy a build ne fulladjon warning-áradatba
+# ============================================================================
+
+if(MSVC)
+    foreach(TGT IFdataGen RinexActualizer)
+        target_compile_options(${TGT} PRIVATE /EHsc /utf-8)
+        target_compile_definitions(${TGT} PRIVATE
+            _USE_MATH_DEFINES
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+            _CRT_SECURE_NO_WARNINGS
+        )
+    endforeach()
 endif()
 
 # ============================================================================
@@ -109,11 +152,23 @@ if(MSVC)
 
     foreach(TGT IFdataGen RinexActualizer)
         target_compile_options(${TGT} PRIVATE
-            $<$<CONFIG:Release>:/O2 /Ot /fp:fast /Ob3 /Zi /permissive->
+            # Megjegyzés: /Ot elavult MSVC kapcsoló volt, /O2 már tartalmazza
+            # a sebesség-fókuszú optimalizálást, ezért kivettük.
+            $<$<CONFIG:Release>:/O2 /fp:fast /Ob3 /Zi /permissive->
             $<$<CONFIG:RelWithDebInfo>:/O2 /Zi>
             $<$<CONFIG:Debug>:/Od /Zi>
         )
+        # Release/RelWithDebInfo alatt engedjük a linkelt PDB generálást,
+        # hogy /Zi mellett a végeredmény is debug-olható maradjon.
+        target_link_options(${TGT} PRIVATE
+            $<$<CONFIG:Release>:/DEBUG>
+            $<$<CONFIG:RelWithDebInfo>:/DEBUG>
+        )
         if(USE_NATIVE_OPT)
+            # FIGYELEM: /arch:AVX2 csak akkor biztonságos, ha a célgép CPU-ja
+            # (amin a binárist futtatod) is támogatja az AVX2-t. Ha nem vagy
+            # benne biztos, vagy másik gépre is szánod a buildet, kapcsold ki:
+            #   cmake .. -DUSE_NATIVE_OPT=OFF
             target_compile_options(${TGT} PRIVATE /arch:AVX2)
         endif()
     endforeach()
@@ -155,6 +210,16 @@ if(BUILD_RINEX_ACTUALIZER)
 
     target_link_libraries(RinexActualizerApp PRIVATE RinexActualizer)
 
+    if(MSVC)
+        target_compile_options(RinexActualizerApp PRIVATE /EHsc /utf-8)
+        target_compile_definitions(RinexActualizerApp PRIVATE
+            _USE_MATH_DEFINES
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+            _CRT_SECURE_NO_WARNINGS
+        )
+    endif()
+
     if(OpenMP_CXX_FOUND)
         target_link_libraries(RinexActualizerApp PUBLIC OpenMP::OpenMP_CXX)
     endif()
@@ -169,6 +234,8 @@ message(STATUS "")
 message(STATUS "==============================================")
 message(STATUS " Sisi GNSS Tools (IFdataGen integrated build)")
 message(STATUS "==============================================")
+message(STATUS "Platform             : ${CMAKE_SYSTEM_NAME}")
+message(STATUS "Compiler             : ${CMAKE_CXX_COMPILER_ID}")
 message(STATUS "RINEX Actualizer dir : ${RINEX_ACTUALIZER_DIR}")
 message(STATUS "OpenMP found         : ${OpenMP_CXX_FOUND}")
 message(STATUS "IPO / LTO supported  : ${IPO_OK}")

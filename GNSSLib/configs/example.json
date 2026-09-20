@@ -1,0 +1,40 @@
+{
+    "time": {
+        "year":   2021,
+        "month":  6,
+        "day":    19,
+        "hour":   0,
+        "minute": 0,
+        "second": 0.0
+    },
+    "position": {
+        "latitude":  47.492721,
+        "longitude": 19.015773,
+        "altitude":  120.0
+    },
+    "velocity": {
+        "speed":  0.0,
+        "course": 0.0
+    },
+    "trajectory": [
+        { "type": "ConstSpeed", "duration": 1.0, "speed": 0.0 }
+    ],
+    "signals": [
+        { "system": "GPS",     "signal": "GPS_L1CA", "enable": true },
+        { "system": "Galileo", "signal": "GAL_E1",   "enable": true },
+        { "system": "BDS",     "signal": "BDS_B1I",  "enable": true }
+    ],
+    "output": {
+        "format":        "IQ16",
+        "sampleRate":    4000000.0,
+        "centerFreq":    1575420000.0,
+        "filename":      "gnss_output.bin",
+        "elevationMask": 5.0
+    },
+    "power": {
+        "noiseFloor":      -172.0,
+        "initPower":       47.0,
+        "elevationAdjust": true
+    },
+    "ephemerisFile": "configs/BRDC00WRD_R_20211700000_01D_GN.rnx"
+}
