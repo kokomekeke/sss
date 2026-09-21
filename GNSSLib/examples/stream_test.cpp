@@ -2,29 +2,19 @@
 
 #include <complex>
 #include <cstddef>
-#include <cstdlib>
 #include <iostream>
 
 int main(int argc, char* argv[])
 {
     if (argc < 2) {
-        std::cout
-            << "usage: " << argv[0]
-            << " <config.json> [max_elements]\n";
+        std::cout << "usage: "
+                  << argv[0]
+                  << " <config.json>\n";
         return 0;
     }
 
     IfGenOptions options;
     options.configFile = argv[1];
-
-    // Alapból csak 20 elemet írunk ki,
-    // hogy ne öntsük tele a terminált.
-    std::size_t maxElements = 20;
-
-    if (argc >= 3) {
-        maxElements =
-            std::strtoull(argv[2], nullptr, 10);
-    }
 
     IfGenEngine eng;
 
@@ -32,107 +22,70 @@ int main(int argc, char* argv[])
         eng.Init(options);
     }
     catch (const std::exception& e) {
-        std::cerr
-            << "Init failed: "
-            << e.what()
-            << "\n";
-
+        std::cerr << "Init failed: " << e.what() << "\n";
         return 1;
     }
 
     const IfGenInfo& info = eng.Info();
 
-    std::cout << "\n";
     std::cout << "========================================\n";
-    std::cout << "GNSSLib Stream Element Test\n";
+    std::cout << "GNSSLib Element-by-Element Test\n";
     std::cout << "========================================\n";
 
-    std::cout
-        << "Sample rate : "
-        << info.sampleRateHz / 1e6
-        << " MHz\n";
+    std::cout << "Sample rate : "
+              << info.sampleRateHz / 1e6
+              << " MHz\n";
 
-    std::cout
-        << "Center freq : "
-        << info.centerFreqHz / 1e6
-        << " MHz\n";
+    std::cout << "Center freq : "
+              << info.centerFreqHz / 1e6
+              << " MHz\n";
 
-    std::cout
-        << "Channels    : "
-        << info.nChannels
-        << "\n";
+    std::cout << "Channels    : "
+              << info.nChannels
+              << "\n";
+
+    std::cout << "sizeof(complex<float>) = "
+              << sizeof(std::complex<float>)
+              << " bytes\n";
 
     std::cout << "----------------------------------------\n";
 
-    std::size_t totalElements = 0;
+    std::size_t elementNumber = 0;
+
+    // A Read() alapú Stream ágat használjuk.
+    constexpr std::size_t chunk = 4000;
 
     eng.Stream(
-        [&](const std::complex<float>* s,
+        [&](const std::complex<float>* samples,
             std::size_t n) -> bool
         {
             for (std::size_t i = 0; i < n; ++i) {
 
-                if (totalElements < maxElements) {
+                const std::complex<float>& sample = samples[i];
 
-                    std::cout
-                        << "Element #"
-                        << totalElements
-                        << "\n";
+                std::cout
+                    << "Element #" << elementNumber
+                    << " | size=" << sizeof(sample)
+                    << " bytes"
+                    << " | I=" << sample.real()
+                    << " | Q=" << sample.imag()
+                    << "\n";
 
-                    std::cout
-                        << "  address      = "
-                        << static_cast<const void*>(&s[i])
-                        << "\n";
-
-                    std::cout
-                        << "  type         = std::complex<float>\n";
-
-                    std::cout
-                        << "  size         = "
-                        << sizeof(s[i])
-                        << " bytes\n";
-
-                    std::cout
-                        << "  I            = "
-                        << s[i].real()
-                        << "\n";
-
-                    std::cout
-                        << "  Q            = "
-                        << s[i].imag()
-                        << "\n";
-
-                    std::cout << "\n";
-                }
-
-                ++totalElements;
-
-                if (totalElements >= maxElements) {
-                    return false;
-                }
+                ++elementNumber;
             }
 
-            return true;
-        }
+            // Első blokk után álljunk meg.
+            return false;
+        },
+        chunk
     );
 
     eng.Close();
 
     std::cout << "----------------------------------------\n";
-
-    std::cout
-        << "Elements inspected: "
-        << (totalElements < maxElements
-                ? totalElements
-                : maxElements)
-        << "\n";
-
-    std::cout
-        << "sizeof(complex<float>): "
-        << sizeof(std::complex<float>)
-        << " bytes\n";
-
-    std::cout << "========================================\n";
+    std::cout << "Received elements: "
+              << elementNumber
+              << "\n";
 
     return 0;
 }

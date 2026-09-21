@@ -71,6 +71,7 @@ if exist "%BUILD_DIR%\bin\basic_usage.exe" (
     popd
 )
 
+
 REM ---- Install ---------------------------------------------------------------
 
 echo [INFO] Installing to %INSTALL_PREFIX%...
