@@ -117,3 +117,9 @@ SignalSim/EphData/*.old
 # --------------------------------------------------------------------
 # iq8to16.py - keep this, it's a tool
 *.ods
+
+.sigmf_data
+SignalSim/*.iq
+SignalSim/*.sigmf-meta
+SignalSim/IFdataGen/*.sigmf-data
+fcopy

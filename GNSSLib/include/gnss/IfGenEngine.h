@@ -40,12 +40,9 @@ struct IfGenOptions {
 
 // ============================================================================
 // Strukturalt setup: a hivo fel epiti fel a sajat formatumabol.
-//
-// A mertekegysegek es koordinatak SI/fok alapuak (nem a SignalSim belso radian/kHz
-// reprezentacioja), hogy a hivo oldalnak ne kelljen ismernie a SignalSim konvencioit.
 // ============================================================================
 
-// UTC ido. A hetfovel (Week) es a leap secondokkal a library szamol, ezt nem kell megadni.
+// UTC ido.
 struct IfGenTime {
     int    year   = 1980;
     int    month  = 1;
@@ -68,32 +65,48 @@ struct IfGenVelocity {
     double courseDeg = 0.0;
 };
 
-// A CTrajectory harom tamogatott szegmens-tipusa.
+// A CTrajectory altal tamogatott szegmens-tipusok.
+// Ezek a SignalSim Trajectory.h TrajectoryType enumeratorait tukrozik.
+// A VerticalAcc es Jerk jelenleg a ConstAcc-re vannak mappelve (lasd IfGenEngine.cpp),
+// mert nem minden SignalSim build tartalmazza a megfelelo enumeratorokat.
 enum class IfGenTrajectoryType {
-    ConstSpeed,     // allando sebesseg `durationS` masodpercig
-    ConstAcc,       // allando gyorsulas `durationS` masodpercig
-    HorizontalTurn  // vizszintes kanyar allando szogsebesseggel `durationS` masodpercig
+    ConstSpeed,
+    ConstAcc,
+    VerticalAcc,    // -> TrajTypeConstAcc (ha nincs dedikalt SignalSim tipus)
+    Jerk,           // -> TrajTypeConstAcc (ha nincs dedikalt SignalSim tipus)
+    HorizontalTurn
 };
 
 struct IfGenTrajectorySegment {
     IfGenTrajectoryType type = IfGenTrajectoryType::ConstSpeed;
-    double durationS    = 0.0;   // szegmens hossza, s
-    double speedMps      = 0.0;  // ConstSpeed eseten
-    double accelMps2     = 0.0;  // ConstAcc eseten
-    double turnRateDegS  = 0.0;  // HorizontalTurn eseten, elojeles fok/s
+    double durationS     = 0.0;   // szegmens hossza, s
+    double speedMps      = 0.0;   // ConstSpeed eseten
+    double accelMps2     = 0.0;   // ConstAcc / VerticalAcc eseten
+    double jerkMps3      = 0.0;   // Jerk eseten (informativ; SignalSim ConstAcc-re mappeljuk)
+    double courseDeg     = 0.0;   // opcionalis irany (informativ; nem kerul at a CTrajectory-ba)
+    double radiusM       = 0.0;   // HorizontalTurn eseten opcionalis (informativ)
+    double turnRateDegS  = 0.0;   // HorizontalTurn eseten, elojeles fok/s
 };
 
-// Tamogatott GNSS jelek. A nev egyertelmuen tartalmazza a rendszert is, ez donti el a
-// belso GnssSystem + jel-index parost; a rendszer nem kulon parameter.
+// Tamogatott GNSS jelek. A nev egyertelmuen tartalmazza a rendszert is.
 enum class IfGenSignal {
     GPS_L1CA, GPS_L1C, GPS_L2C, GPS_L2P, GPS_L5,
     BDS_B1C, BDS_B1I, BDS_B2I, BDS_B3I, BDS_B2a, BDS_B2b,
     GAL_E1, GAL_E5a, GAL_E5b, GAL_E5, GAL_E6,
-    GLO_G1, GLO_G2
+    GLO_G1, GLO_G2, GLO_G3
+};
+
+// GnssSystem tukor.
+enum class IfGenSystem {
+    GPS,
+    BDS,
+    Galileo,
+    GLONASS
 };
 
 struct IfGenSignalSelect {
     IfGenSignal signal;
+    IfGenSystem system = IfGenSystem::GPS;   // informativ; a signal neve is hordozza
     bool        enable = true;
 };
 
@@ -104,7 +117,7 @@ struct IfGenOutput {
     double      centerFreqHz    = 1575.42e6;
     IfGenFormat format          = IfGenFormat::IQ8;
     double      elevationMaskDeg = 5.0;
-    std::string binFile;          // csak akkor kell, ha writeBin=true; ures -> "output.bin"
+    std::string binFile;
 };
 
 struct IfGenPower {
@@ -119,14 +132,13 @@ struct IfGenParams {
     IfGenVelocity velocity;
     std::vector<IfGenTrajectorySegment> trajectory;   // legalabb 1 elem
 
-    std::string ephemerisFile;                        // RINEX nav fajl eleresi utja
-    bool        actualizeRinex = true;                // az ephemerist a `time`-hoz aktualizalja-e
+    std::string ephemerisFile;
+    bool        actualizeRinex = true;
 
     std::vector<IfGenSignalSelect> signals;            // legalabb 1 enable=true elem
     IfGenOutput output;
     IfGenPower  power;
 
-    // motor-szintu beallitasok (megfelelnek az IfGenOptions azonos nevu mezoinek)
     bool          writeBin     = false;
     bool          writeTag     = false;
     bool          multiThread  = true;
@@ -137,9 +149,6 @@ struct IfGenParams {
     float         gain         = 1.0f;
 };
 
-// Ellenorzi a parametereket a motor felepitese (RINEX beolvasas, csatornak) nelkul: ertektartomanyok,
-// legalabb egy engedelyezett jel, a RINEX fajl letezik-e. `errors` ures marad, ha minden rendben.
-// Hivhato a teszt elfogadasa elott, meg jóval a tenyleges felvetel/Init() elott.
 bool ValidateIfGenParams(const IfGenParams &params, std::vector<std::string> &errors);
 
 // ============================================================================
@@ -152,8 +161,8 @@ struct IfGenInfo {
     std::size_t samplesPerBlock = 0;      // 1 ms
     std::size_t totalBlocks     = 0;      // trajektoria hossza ms-ban
     int         nChannels       = 0;
-    std::string outputFile;               // a (JSON-beli vagy felulirt) .bin fajlnev
-    int         formatBits      = 0;      // .bin formatum: 2 / 4 / 8 / 16 bit komponensenkent
+    std::string outputFile;
+    int         formatBits      = 0;
     std::size_t totalSamples() const { return samplesPerBlock * totalBlocks; }
 };
 
@@ -164,31 +173,20 @@ public:
     IfGenEngine(const IfGenEngine&) = delete;
     IfGenEngine& operator=(const IfGenEngine&) = delete;
 
-    // JSON + RINEX beolvasas, muholdak/csatornak felepitese. Hiba: std::runtime_error.
     void Init(const IfGenOptions &opt);
-
-    // Strukturalt setup: nem olvas semmilyen JSON-t, csak a `params`-ban kapott ertekekbol dolgozik.
-    // Elobb ValidateIfGenParams()-t hivja; ervenytelen parameterek eseten std::runtime_error-t dob,
-    // az osszegyujtott hibauzenetekkel egyutt. Utana ugyanugy RINEX-et olvas es aktualizal, csatornakat
-    // epit, mint a JSON-os ut.
     void Init(const IfGenParams &params);
 
     bool IsOpen() const { return bool(impl); }
     const IfGenInfo& Info() const;
 
     // --- Pull API ---
-    // Egy 1 ms-os blokk (zero-copy, a kovetkezo hivasig ervenyes). false = vege a trajektoriának.
     bool NextBlock(const std::complex<float> *&samples, std::size_t &n);
-    // Tetszoleges meretu olvasas; visszaadja a kiirt mintak szamat (< n, ha vege).
     std::size_t Read(std::complex<float> *out, std::size_t n);
 
     // --- Push API ---
-    // Vegigstreameli a szimulaciot. chunk=0 -> natív 1 ms blokkok, egyebkent pontosan chunk minta
-    // (az utolso rovidebb lehet). A callback false-szal megszakithatja. Visszaadja az atadott mintak szamat.
     using SampleCallback = std::function<bool(const std::complex<float>*, std::size_t)>;
     std::size_t Stream(const SampleCallback &cb, std::size_t chunk = 0);
 
-    // .bin flush + lezaras, erőforrasok felszabaditasa. Tobbszor hivhato.
     void Close();
 
 private:

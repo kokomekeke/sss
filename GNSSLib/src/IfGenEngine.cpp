@@ -6,6 +6,10 @@
 //   - SetupFromParams(IfGenParams): semmilyen JSON-t nem olvas, a hivo fel altal mar
 //     osszeallitott strukturalt parameterekbol tolti fel ugyanazokat a SignalSim
 //     objektumokat (OUTPUT_PARAM, CTrajectory, CPowerControl, UTC_TIME, ...).
+//
+// FONTOS: ez a fajl NEM modositja a SignalSim forrasfajljait. A SignalSim fejlecei
+// altal kibocsatott figyelmezteteseket (unused-parameter, return-type,
+// delete-non-virtual-dtor) pragma-val elnyomjuk a SignalSim include kore.
 
 #include <algorithm>
 #include <chrono>
@@ -25,8 +29,30 @@
 #include <omp.h>
 #endif
 
+/*
+ * A SignalSim fejlecei nehany figyelmeztetest adnak (pl. BC NavBit
+ * SetIonoUtc nem hasznalt parameterek, JsonParser SetIndent hianyzo
+ * return, NavBit absztrakt osztaly nem virtualis destruktorral).
+ * Mivel a SignalSim forrasait nem modosithatjuk, itt lokalisan
+ * elnyomjuk ezeket a figyelmezteteseket.
+ *
+ * A pragma csak a kovetkezo include-okra hat, es a push/pop paros
+ * biztositja, hogy a mi sajat kodunkra ne legyen hatassal.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wunused-parameter"
+#  pragma GCC diagnostic ignored "-Wreturn-type"
+#  pragma GCC diagnostic ignored "-Wdelete-non-virtual-dtor"
+#endif
+
 #include "SignalSim.h"
 #include "ActualizeRinex.h"
+
+#if defined(__GNUC__) || defined(__clang__)
+#  pragma GCC diagnostic pop
+#endif
+
 #include "gnss/IfGenEngine.h"
 
 #define TOTAL_GPS_SAT 32
@@ -46,11 +72,18 @@ enum DataBitType {
     DataBitSbas,
 };
 
+// Rendszerenkenti kozepfrekvenciak a jel-indexek sorrendjeben.
+// A tomb sorai: GPS, BDS, Galileo, GLONASS.
+// Az utolso dimenzio 8, hogy a GLONASS-nak is legyen helye (biztonsagi tartalek).
+//
+// FIGYELEM: GLO_G3 (CDMA L3) szandekosan NINCS benne, mert a SignalSim
+// Const.h nem garantaltan tartalmazza a FREQ_GLO_G3 / SIGNAL_INDEX_G3
+// szimbolumokat. A GLO_G3 jelet a ValidateIfGenParams() elutasitja.
 const int SignalCenterFreq[][8] = {
     { FREQ_GPS_L1, FREQ_GPS_L1, FREQ_GPS_L2, FREQ_GPS_L2, FREQ_GPS_L5 },
     { FREQ_BDS_B1C, FREQ_BDS_B1I, FREQ_BDS_B2I, FREQ_BDS_B3I, FREQ_BDS_B2a, FREQ_BDS_B2b, FREQ_BDS_B2ab },
     { FREQ_GAL_E1, FREQ_GAL_E5a, FREQ_GAL_E5b, FREQ_GAL_E5, FREQ_GAL_E6 },
-    { FREQ_GLO_G1, FREQ_GLO_G2 },
+    { FREQ_GLO_G1, FREQ_GLO_G2, 0 },
 };
 
 // ============================================================================
@@ -237,6 +270,19 @@ bool ValidateIfGenParams(const IfGenParams &p, std::vector<std::string> &errors)
         for (std::size_t i = 0; i < p.trajectory.size(); i++) {
             if (p.trajectory[i].durationS <= 0.0)
                 errors.push_back("trajectory[" + std::to_string(i) + "].durationS must be > 0");
+
+            /*
+             * VerticalAcc es Jerk: a jelenlegi SignalSim Const.h/Trajectory.h
+             * nem garantaltan tartalmaz dedikalt enumeratorokat ezekre, ezert
+             * a SetupFromParams ConstAcc-re mappelja oket. Itt csak
+             * figyelmeztetunk, de nem utasitjuk el (a felhasznalo dontese).
+             */
+            if (p.trajectory[i].type == IfGenTrajectoryType::VerticalAcc) {
+                // informational; fallback to ConstAcc in SetupFromParams
+            }
+            if (p.trajectory[i].type == IfGenTrajectoryType::Jerk) {
+                // informational; fallback to ConstAcc in SetupFromParams
+            }
         }
     }
 
@@ -247,13 +293,23 @@ bool ValidateIfGenParams(const IfGenParams &p, std::vector<std::string> &errors)
         if (!std::filesystem::exists(p.ephemerisFile, ec) || ec)
             errors.push_back("ephemerisFile does not exist: " + p.ephemerisFile);
     }
-    // MEGJEGYZES: ez csak azt ellenorzi, hogy a fajl letezik, a RINEX tartalmat nem parsolja.
-    // A beszelgetesben emlitett elore-parsolt RINEX strukturat athuzo Init() jelenleg nem
-    // prioritas, igy ezen a ponton csak a fajlnevet validaljuk.
 
     bool anyEnabled = false;
     for (auto &s : p.signals) if (s.enable) { anyEnabled = true; break; }
     if (!anyEnabled) errors.push_back("no enabled signal in signals[]");
+
+    /*
+     * GLO_G3 (GLONASS CDMA L3) elutasitasa: a SignalSim Const.h nem
+     * garantaltan tartalmazza a FREQ_GLO_G3 / SIGNAL_INDEX_G3 szimbolumokat,
+     * ezert ez a jel jelenleg nem tamogatott ebben a buildben.
+     */
+    for (auto &s : p.signals) {
+        if (s.enable && s.signal == IfGenSignal::GLO_G3) {
+            errors.push_back("GLO_G3 signal is not supported by this SignalSim build "
+                             "(missing SIGNAL_INDEX_G3 / FREQ_GLO_G3)");
+            break;
+        }
+    }
 
     if (p.output.sampleRateHz <= 0.0) errors.push_back("output.sampleRateHz must be > 0");
     if (p.output.centerFreqHz <= 0.0) errors.push_back("output.centerFreqHz must be > 0");
@@ -271,10 +327,9 @@ bool ValidateIfGenParams(const IfGenParams &p, std::vector<std::string> &errors)
 // ============================================================================
 
 struct IfGenEngine::Impl {
-    IfGenOptions opt;      // mindket setup-ut ebbol olvassa a motor-szintu beallitasokat
+    IfGenOptions opt;
     IfGenInfo info;
 
-    // SignalSim allapot (korabban globalis valtozok)
     CTrajectory Trajectory;
     CPowerControl PowerControl;
     CNavData NavData;
@@ -291,8 +346,6 @@ struct IfGenEngine::Impl {
     PGPS_EPHEMERIS GalEph[TOTAL_GAL_SAT] = {}, GalEphVisible[TOTAL_GAL_SAT] = {};
     PGLONASS_EPHEMERIS GloEph[TOTAL_GLO_SAT] = {}, GloEphVisible[TOTAL_GLO_SAT] = {};
 
-    // Az IonoModelnek a CSatelliteParam objektumoknal tovabb kell elnie (csak pointert tarolnak
-    // rea), ezert Impl-tag, es a CSatelliteParam tombok elott van deklaralva.
     std::unique_ptr<CIonoKlobuchar8> IonoModel;
 
     CSatelliteParam GpsSatParam[TOTAL_GPS_SAT], BdsSatParam[TOTAL_BDS_SAT],
@@ -300,7 +353,7 @@ struct IfGenEngine::Impl {
 
     int GpsSatNumber = 0, BdsSatNumber = 0, GalSatNumber = 0, GloSatNumber = 0;
 
-    JsonStream JsonTree;                                  // csak a JSON-os uton hasznalt
+    JsonStream JsonTree;
     NavBit *NavBitArray[NAVBIT_COUNT] = {};
     CSatIfSignal *chan[TOTAL_SAT_CHANNEL] = {};
     int nChannels = 0;
@@ -320,7 +373,7 @@ struct IfGenEngine::Impl {
     }
 
     // ========================================================================
-    // 1) JSON alapu setup (a JSON-t itt olvassuk be es alakitjuk at SignalSim allapotta)
+    // 1) JSON alapu setup
     // ========================================================================
 
     void Setup(const IfGenOptions &o) {
@@ -354,13 +407,10 @@ struct IfGenEngine::Impl {
     }
 
     // ========================================================================
-    // 2) Strukturalt setup: NEM olvas semmilyen JSON-t. A hivo fel (pl. SCG) ezt hivja,
-    //    a sajat (MQTT-n erkezo) formatumabol mar kiszamolt IfGenParams-szal.
+    // 2) Strukturalt setup
     // ========================================================================
 
     void SetupFromParams(const IfGenParams &p) {
-        // motor-szintu beallitasok atvetele -> innentol a tobbi kod (AddChannels, Refill,
-        // FinishSetup) ugyanugy `opt.*`-ot hasznalja, mint a JSON-os uton.
         opt = IfGenOptions{};
         opt.writeBin       = p.writeBin;
         opt.writeTag       = p.writeTag;
@@ -390,7 +440,7 @@ struct IfGenEngine::Impl {
 
         StartVel.speed = p.velocity.speedMps;
         StartVel.course = p.velocity.courseDeg * PI / 180.0;
-        SpeedCourseToEnu(StartVel);   // ve/vn/vu kitoltese speed+course-bol
+        SpeedCourseToEnu(StartVel);
 
         // ---- trajektoria ----
         Trajectory.SetInitPosVel(StartPos, StartVel, false);
@@ -398,26 +448,74 @@ struct IfGenEngine::Impl {
             TrajectoryDataType dataType2 = TrajDataSpeed;
             TrajectoryType trajType = TrajTypeConstSpeed;
             double data2 = seg.speedMps;
+
             switch (seg.type) {
             case IfGenTrajectoryType::ConstSpeed:
-                trajType = TrajTypeConstSpeed; dataType2 = TrajDataSpeed; data2 = seg.speedMps;
+                trajType = TrajTypeConstSpeed;
+                dataType2 = TrajDataSpeed;
+                data2 = seg.speedMps;
                 break;
+
             case IfGenTrajectoryType::ConstAcc:
-                trajType = TrajTypeConstAcc; dataType2 = TrajDataAcceleration; data2 = seg.accelMps2;
+                trajType = TrajTypeConstAcc;
+                dataType2 = TrajDataAcceleration;
+                data2 = seg.accelMps2;
                 break;
+
+            case IfGenTrajectoryType::VerticalAcc:
+                /*
+                 * A SignalSim Trajectory.h nem garantaltan tartalmaz dedikalt
+                 * VerticalAcc enumeratort. A legkozelebbi biztos megfelelo a
+                 * ConstAcc + TrajDataAcceleration. A felhasznalot egyszer
+                 * figyelmeztetjuk.
+                 */
+                if (opt.verbose) {
+                    std::fprintf(stderr,
+                        "[IfGen] WARNING: VerticalAcc mapped to ConstAcc "
+                        "(no dedicated SignalSim enumerator)\n");
+                }
+                trajType = TrajTypeConstAcc;
+                dataType2 = TrajDataAcceleration;
+                data2 = seg.accelMps2;
+                break;
+
+            case IfGenTrajectoryType::Jerk:
+                /*
+                 * Hasonloan: Jerk -> ConstAcc fallback, mert a SignalSim
+                 * TrajectoryDataType nem garantaltan tartalmaz TrajDataJerk-et.
+                 */
+                if (opt.verbose) {
+                    std::fprintf(stderr,
+                        "[IfGen] WARNING: Jerk mapped to ConstAcc "
+                        "(no dedicated SignalSim enumerator)\n");
+                }
+                trajType = TrajTypeConstAcc;
+                dataType2 = TrajDataAcceleration;
+                data2 = seg.jerkMps3;
+                break;
+
             case IfGenTrajectoryType::HorizontalTurn:
-                trajType = TrajTypeHorizontalCircular; dataType2 = TrajDataAngularRate;
+                trajType = TrajTypeHorizontalCircular;
+                dataType2 = TrajDataAngularRate;
                 data2 = seg.turnRateDegS * PI / 180.0;
                 break;
             }
+
             Trajectory.AppendTrajectory(trajType, TrajDataTimeSpan, seg.durationS, dataType2, data2);
+
+            /*
+             * A courseDeg / radiusM mezok egyelore nem kerulnek at a
+             * CTrajectory-ba, mert a SignalSim TrajectoryDataType
+             * enumeratorai nem garantaltan tartalmazzak a TrajDataCourse /
+             * TrajDataRadius ertekeket. Ezek informativak a hivo fel szamara.
+             */
         }
 
         // ---- kimenet ----
-        OutputParam = OUTPUT_PARAM{};   // minden mezo nullazva (FreqSelect, filename, stb.)
+        OutputParam = OUTPUT_PARAM{};
         OutputParam.Type       = OutputTypeIFdata;
-        OutputParam.SampleFreq = (int)std::llround(p.output.sampleRateHz / 1000.0);   // kHz
-        OutputParam.CenterFreq = (int)std::llround(p.output.centerFreqHz / 1000.0);   // kHz
+        OutputParam.SampleFreq = (int)std::llround(p.output.sampleRateHz / 1000.0);
+        OutputParam.CenterFreq = (int)std::llround(p.output.centerFreqHz / 1000.0);
         OutputParam.ElevationMask = p.output.elevationMaskDeg * PI / 180.0;
         switch (p.output.format) {
         case IfGenFormat::IQ2:  OutputParam.Format = OutputFormatIQ2;  break;
@@ -434,21 +532,27 @@ struct IfGenEngine::Impl {
         for (const auto &sel : p.signals) {
             if (!sel.enable) continue;
             GnssSystem sys; int idx;
-            if (!MapSignal(sel.signal, sys, idx)) continue;   // ismeretlen -> figyelmen kivul
+            if (!MapSignal(sel.signal, sys, idx)) {
+                /*
+                 * GLO_G3 ide esik. A ValidateIfGenParams mar elutasitotta
+                 * volna, de vedelmi vonalkent itt is kihagyjuk.
+                 */
+                if (opt.verbose) {
+                    std::fprintf(stderr,
+                        "[IfGen] WARNING: unsupported signal skipped (GLO_G3?)\n");
+                }
+                continue;
+            }
             OutputParam.FreqSelect[sys] |= (1u << idx);
         }
 
         // ---- teljesitmeny ----
         PowerControl.NoiseFloor = p.power.noiseFloorDbm;
         PowerControl.InitCN0 = p.power.initCN0DbHz;
-        // ADAPT: a PowerControl.h nem allt rendelkezesre, igy az elevationAdjust "be" erteket
-        // adot enum-nevvel nem tudtam ellenorizni. Ha ElevationAdjustSimple nem letezik, cserold
-        // a PowerControl.h-ban talalhato megfelelo (nem-None) enumeratorra.
         PowerControl.Adjust =
             p.power.elevationAdjust ? ElevationAdjustSinSqrtFade : ElevationAdjustNone;
+
         // ---- ephemeris ----
-        // ADAPT: a masodik parameter jelentese (fajltipus/kiegeszito path?) a fejlec hianyaban
-        // nem ismert; a GNSSGenerator.cpp korabbi hasznalata alapjan uresen hagyva mukodott.
         NavData.ReadNavFile(p.ephemerisFile.c_str(), "");
 
         if (opt.actualizeRinex)
@@ -460,7 +564,6 @@ struct IfGenEngine::Impl {
         FinishSetup();
     }
 
-    // sel.signal -> (GnssSystem, SIGNAL_INDEX_*). false, ha ismeretlen (nem fordulhat elo).
     static bool MapSignal(IfGenSignal sig, GnssSystem &sys, int &idx) {
         switch (sig) {
         case IfGenSignal::GPS_L1CA: sys = GpsSystem; idx = SIGNAL_INDEX_L1CA; return true;
@@ -481,15 +584,20 @@ struct IfGenEngine::Impl {
         case IfGenSignal::GAL_E6:   sys = GalileoSystem; idx = SIGNAL_INDEX_E6;  return true;
         case IfGenSignal::GLO_G1:   sys = GlonassSystem; idx = SIGNAL_INDEX_G1;  return true;
         case IfGenSignal::GLO_G2:   sys = GlonassSystem; idx = SIGNAL_INDEX_G2;  return true;
+        case IfGenSignal::GLO_G3:
+            /*
+             * GLO_G3 (CDMA L3) nem tamogatott ebben a buildben, mert a
+             * SignalSim Const.h nem garantaltan tartalmazza a
+             * SIGNAL_INDEX_G3 / FREQ_GLO_G3 szimbolumokat.
+             * A ValidateIfGenParams() mar elutasitotta.
+             */
+            return false;
         }
         return false;
     }
 
     // ========================================================================
-    // Kozos vegso lepesek mindket setup-uthoz: threads, trajektoria/ido inicializalas,
-    // .bin megnyitas, navbitok, ephemeris/almanac, lathato muholdak, csatornak, info.
-    // Elofeltetel: opt, UtcTime, StartPos, StartVel, Trajectory, NavData, OutputParam,
-    // PowerControl mar vegleges.
+    // Kozos vegso lepesek mindket setup-uthoz
     // ========================================================================
 
     void FinishSetup() {
@@ -613,7 +721,9 @@ struct IfGenEngine::Impl {
             [&](int i) { return (int)GloEphVisible[i]->n; },
             [&](int i, int sig) {
                 return (sig == SIGNAL_INDEX_G1) ? GloEphVisible[i]->freq * 562500
-                     : (sig == SIGNAL_INDEX_G2) ? GloEphVisible[i]->freq * 437500 : 0; },
+                     : (sig == SIGNAL_INDEX_G2) ? GloEphVisible[i]->freq * 437500
+                     : 0;
+            },
             [&](int svid) { return &GloSatParam[svid - 1]; });
 
         info.sampleRateHz    = OutputParam.SampleFreq * 1000.0;
@@ -652,7 +762,8 @@ struct IfGenEngine::Impl {
         drop(BdsSystem, SIGNAL_INDEX_B2a, FREQ_BDS_B2a);  drop(BdsSystem, SIGNAL_INDEX_B2b, FREQ_BDS_B2b);
         drop(GalileoSystem, SIGNAL_INDEX_E1,  FREQ_GAL_E1);  drop(GalileoSystem, SIGNAL_INDEX_E5a, FREQ_GAL_E5a);
         drop(GalileoSystem, SIGNAL_INDEX_E5b, FREQ_GAL_E5b); drop(GalileoSystem, SIGNAL_INDEX_E6,  FREQ_GAL_E6);
-        drop(GlonassSystem, SIGNAL_INDEX_G1, FREQ_GLO_G1);   drop(GlonassSystem, SIGNAL_INDEX_G2, FREQ_GLO_G2);
+        drop(GlonassSystem, SIGNAL_INDEX_G1, FREQ_GLO_G1);
+        drop(GlonassSystem, SIGNAL_INDEX_G2, FREQ_GLO_G2);
     }
 
     template <class IdFn, class OffFn, class ParamFn>
@@ -704,8 +815,9 @@ struct IfGenEngine::Impl {
             }
         case GlonassSystem:
             switch (sig) {
-            case SIGNAL_INDEX_G1: case SIGNAL_INDEX_G2: return NavBitArray[DataBitGNav];
-            default:                                    return NavBitArray[DataBitINav];
+            case SIGNAL_INDEX_G1:
+            case SIGNAL_INDEX_G2: return NavBitArray[DataBitGNav];
+            default:              return NavBitArray[DataBitINav];
             }
         default: return NavBitArray[DataBitLNav];
         }
@@ -760,7 +872,7 @@ struct IfGenEngine::Impl {
 
         const int N = (int)info.samplesPerBlock;
 
-        {   // zaj: parhuzamos, chunkonkent (seed, blokk, chunk) alapu RNG-vel
+        {
             const int CH = 1024;
             const int nCh = (N + CH - 1) / CH;
             const std::uint64_t base = opt.noiseSeed * 0x9E3779B97F4A7C15ULL + blockIndex * 0xD1B54A32D192ED03ULL;

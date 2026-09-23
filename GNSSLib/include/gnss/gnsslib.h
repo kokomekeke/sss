@@ -1,254 +1,625 @@
-// Sisi/GNSSLib/include/gnss/gnsslib.h
-//----------------------------------------------------------------------
-// gnsslib.h:
-//   Unified GNSS Signal Processing Library
-//
-//   Combines SignalSim and RinexActualizer functionality.
-//
-//   Two ways to use it:
-//     1. Streaming (recommended): gnss::IfGenEngine (gnss/IfGenEngine.h)
-//        or the C API gnss_stream_* below -> 1 ms IQ blocks from a JSON config.
-//     2. Batch: gnss::GNSSGenerator::initializeFromJSON() + generate()
-//        -> writes the .bin file configured in the JSON.
-//
-//          Copyright (C) 2020-2029 by Jun Mo, All rights reserved.
-//          Modified and extended for library use
-//----------------------------------------------------------------------
-
 #ifndef GNSS_LIB_H
 #define GNSS_LIB_H
 
-#include <stddef.h>
+#include <cstddef>
 #include <cstdint>
+#include <complex>
+#include <memory>
 #include <string>
 #include <vector>
-#include <memory>
 
 #include "gnss/IfGenEngine.h"
 
-//----------------------------------------------------------------------
-// Configuration Structures
-//----------------------------------------------------------------------
-
 namespace gnss {
 
-// Signal types
+/**
+ * Supported GNSS signal types.
+ */
 enum class SignalType {
-    GPS_L1CA, GPS_L1C, GPS_L2C, GPS_L2P, GPS_L5,
-    BDS_B1C, BDS_B1I, BDS_B2I, BDS_B3I, BDS_B2a, BDS_B2b,
-    GAL_E1, GAL_E5a, GAL_E5b, GAL_E5, GAL_E6,
-    GLO_G1, GLO_G2, GLO_G3
+    GPS_L1CA,
+    GPS_L1C,
+    GPS_L2C,
+    GPS_L2P,
+    GPS_L5,
+
+    BDS_B1C,
+    BDS_B1I,
+    BDS_B2I,
+    BDS_B3I,
+    BDS_B2a,
+    BDS_B2b,
+
+    GAL_E1,
+    GAL_E5a,
+    GAL_E5b,
+    GAL_E5,
+    GAL_E6,
+
+    GLO_G1,
+    GLO_G2,
+    GLO_G3
 };
 
-// System types
-enum class SystemType { GPS, BDS, Galileo, GLONASS };
+/**
+ * GNSS constellation/system.
+ */
+enum class SystemType {
+    GPS,
+    BDS,
+    Galileo,
+    GLONASS
+};
 
-// Output formats
-enum class OutputFormat { IQ8, IQ16, IQ4, IQ2 };
+/**
+ * Output sample format.
+ */
+enum class OutputFormat {
+    IQ8,
+    IQ16,
+    IQ4,
+    IQ2
+};
 
-// Trajectory types
-enum class TrajectoryType { ConstSpeed, ConstAcc, VerticalAcc, Jerk, HorizontalTurn };
+/**
+ * Trajectory segment type.
+ */
+enum class TrajectoryType {
+    ConstSpeed,
+    ConstAcc,
+    VerticalAcc,
+    Jerk,
+    HorizontalTurn
+};
 
+/**
+ * GNSS signal selection.
+ */
 struct SignalConfig {
-    SystemType system;
-    SignalType signal;
+    SystemType system = SystemType::GPS;
+    SignalType signal = SignalType::GPS_L1CA;
     bool enable = true;
 };
 
+/**
+ * One trajectory segment.
+ */
 struct TrajectorySegment {
     TrajectoryType type = TrajectoryType::ConstSpeed;
-    double duration = 0.0;      // seconds
-    double speed = 0.0;         // m/s (for ConstSpeed)
-    double acceleration = 0.0;  // m/s^2 (for ConstAcc)
-    double course = 0.0;        // degrees (for HorizontalTurn)
-    double radius = 0.0;        // meters (for HorizontalTurn)
+
+    double duration = 0.0;
+
+    double speed = 0.0;
+    double acceleration = 0.0;
+    double course = 0.0;
+    double radius = 0.0;
 };
 
+/**
+ * Output configuration.
+ */
 struct OutputConfig {
     OutputFormat format = OutputFormat::IQ16;
-    double sampleRate = 4.0e6;      // Hz
-    double centerFreq = 1575.42e6;  // Hz
+
+    double sampleRate = 4.0e6;
+    double centerFreq = 1575.42e6;
+
     std::string filename = "output.bin";
-    double elevationMask = 5.0;     // degrees
+
+    double elevationMask = 5.0;
+
     bool generateTag = false;
+
+    /**
+     * Optional output file override.
+     *
+     * If empty, filename is used.
+     */
+    std::string binFile;
 };
 
+/**
+ * Signal power/noise configuration.
+ */
 struct PowerConfig {
-    double noiseFloor = -172.0;     // dBm
-    double initPower = 47.0;        // dBHz
+    double noiseFloor = -172.0;
+
+    /**
+     * Initial C/N0 in dB-Hz.
+     */
+    double initPower = 47.0;
+
     bool elevationAdjust = true;
 };
 
+/**
+ * Simulation start time.
+ */
 struct TimeConfig {
     int year = 2021;
     int month = 6;
     int day = 19;
+
     int hour = 0;
     int minute = 0;
+
     double second = 0.0;
+
+    /**
+     * Kept for compatibility/documentation.
+     *
+     * The current IfGenParams interface uses UTC fields.
+     */
     std::string timeType = "UTC";
 };
 
+/**
+ * Initial receiver position.
+ *
+ * Latitude/longitude are degrees.
+ * Altitude is meters.
+ */
 struct PositionConfig {
-    double latitude = 47.492721;    // degrees
-    double longitude = 19.015773;   // degrees
-    double altitude = 20.0;         // meters
+    double latitude = 47.492721;
+    double longitude = 19.015773;
+    double altitude = 20.0;
 };
 
+/**
+ * Initial receiver velocity.
+ *
+ * Speed is m/s.
+ * Course is degrees.
+ */
 struct VelocityConfig {
-    double speed = 0.0;             // m/s
-    double course = 0.0;            // degrees (0 = North, 90 = East)
+    double speed = 0.0;
+    double course = 0.0;
 };
 
+/**
+ * Complete GNSS simulation configuration.
+ *
+ * This is the primary programmatic configuration API.
+ *
+ * No JSON file is required when using initialize(const GNSSConfig&).
+ */
 struct GNSSConfig {
     TimeConfig time;
+
     PositionConfig position;
+
     VelocityConfig velocity;
+
     std::vector<TrajectorySegment> trajectory;
+
+    /**
+     * RINEX navigation file.
+     */
     std::string ephemerisFile;
+
+    /**
+     * If true, RINEX ephemerides are actualized to the
+     * requested simulation start time.
+     */
+    bool actualizeRinex = false;
+
     std::vector<SignalConfig> signals;
+
     OutputConfig output;
+
     PowerConfig power;
+
+    /**
+     * Engine/runtime options.
+     */
+    bool writeBin = true;
+    bool writeTag = false;
+
+    bool multiThread = true;
+    int nThreads = 0;
+
+    bool verbose = false;
+
+    bool validateOnly = false;
+
+    std::uint64_t noiseSeed = 0;
+
+    float gain = 1.0f;
 };
 
+/**
+ * Generation statistics.
+ */
 struct GenerationStats {
-    double duration = 0.0;          // seconds
+    double duration = 0.0;
+
     double dataSizeMB = 0.0;
+
     int totalSamples = 0;
+
     int clippedSamples = 0;
+
     int visibleSatellites = 0;
-    double generationTime = 0.0;    // seconds
+
+    double generationTime = 0.0;
 };
 
-//----------------------------------------------------------------------
-// Batch generator (JSON driven)
-//----------------------------------------------------------------------
-
+/**
+ * High-level GNSS generator API.
+ *
+ * This is the recommended API for applications embedding GNSSLib.
+ *
+ * The generator can be initialized either:
+ *
+ *   1. directly from GNSSConfig
+ *   2. from a JSON configuration file
+ *
+ * For library integration, GNSSConfig is the preferred interface.
+ */
 class GNSSGenerator {
 public:
     GNSSGenerator();
+
     ~GNSSGenerator();
 
-    // NOT SUPPORTED yet: the programmatic GNSSConfig path was never functional.
-    // Returns false; use initializeFromJSON().
+    GNSSGenerator(const GNSSGenerator&) = delete;
+    GNSSGenerator& operator=(const GNSSGenerator&) = delete;
+
+    GNSSGenerator(GNSSGenerator&&) noexcept;
+    GNSSGenerator& operator=(GNSSGenerator&&) noexcept;
+
+    /**
+     * Initialize directly from C++ parameters.
+     *
+     * No JSON file is read.
+     *
+     * Internally:
+     *
+     *   GNSSConfig -> IfGenParams -> IfGenEngine
+     */
     bool initialize(const GNSSConfig& config);
 
-    // Reads + validates the JSON (cheap probe, no signal generation) and fills getConfig().output
+    /**
+     * Initialize from a JSON configuration file.
+     *
+     * This is retained for standalone/config-file based use.
+     */
     bool initializeFromJSON(const std::string& jsonFile);
 
-    // Override the .bin file name from the JSON (call after initializeFromJSON)
+    /**
+     * Set/override the output file.
+     *
+     * If the generator is already initialized, the new output
+     * file is applied on the next generation/openStream call.
+     */
     void setOutputFile(const std::string& filename);
 
-    // Runs the simulation and writes the .bin file. durationMs <= 0 -> whole trajectory.
+    /**
+     * Generate a complete simulation.
+     *
+     * durationSeconds specifies the generated signal duration.
+     */
     bool generate(double durationSeconds);
+
+    /**
+     * Generate a complete simulation.
+     *
+     * durationMs specifies the generated signal duration.
+     */
     bool generate(int durationMs);
 
-    // Streaming: initialises `engine` from the JSON given to initializeFromJSON().
-    // writeBin = true keeps the clean .bin file writing alongside the stream.
-    bool openStream(IfGenEngine& engine, bool writeBin = false,
-                    const std::string& binFile = "", float gain = 1.0f);
+    /**
+     * Open the generator for streaming.
+     *
+     * If writeBin is true, the engine may also write the generated
+     * samples to a binary output file.
+     */
+    bool openStream(
+        bool writeBin = false,
+        const std::string& binFile = "",
+        float gain = 1.0f
+    );
 
-    // Legacy: in-memory buffer is not kept any more (always empty). Use the streaming API.
-    const std::vector<uint8_t>& getData() const { return m_data; }
-    const GenerationStats& getStats() const { return m_stats; }
-    const GNSSConfig& getConfig() const { return m_config; }
+    /**
+     * Compatibility overload.
+     *
+     * Opens the configured simulation into an externally supplied
+     * IfGenEngine.
+     */
+    bool openStream(
+        IfGenEngine& engine,
+        bool writeBin = false,
+        const std::string& binFile = "",
+        float gain = 1.0f
+    );
 
-    // Copies the generated .bin to `filename` (empty -> just checks that it was generated)
+    /**
+     * Read generated complex samples.
+     *
+     * Returns the number of samples actually read.
+     *
+     * The stream must have been opened with openStream().
+     */
+    std::size_t read(
+        std::complex<float>* out,
+        std::size_t n
+    );
+
+    /**
+     * Stream generated samples through a callback.
+     *
+     * Returning false from the callback stops the stream.
+     *
+     * Returns the number of samples processed.
+     */
+    std::size_t stream(
+        const IfGenEngine::SampleCallback& callback,
+        std::size_t chunk = 0
+    );
+
+    /**
+     * Close the active stream.
+     */
+    void closeStream();
+
+    /**
+     * Legacy data accessor.
+     *
+     * The current implementation is stream-oriented and therefore
+     * this vector is normally empty.
+     */
+    const std::vector<std::uint8_t>& getData() const
+    {
+        return m_data;
+    }
+
+    /**
+     * Get generation statistics.
+     */
+    const GenerationStats& getStats() const
+    {
+        return m_stats;
+    }
+
+    /**
+     * Get the active high-level configuration.
+     */
+    const GNSSConfig& getConfig() const
+    {
+        return m_config;
+    }
+
+    /**
+     * Save generated output.
+     *
+     * If generation was performed with writeBin=true, this copies/
+     * finalizes the produced output to filename when supported by
+     * the current backend.
+     */
     bool saveToFile(const std::string& filename = "");
 
+    /**
+     * Reset the generator.
+     */
     void clear();
+
+    /**
+     * Check whether the generator has been initialized.
+     */
+    bool isInitialized() const
+    {
+        return m_initialized;
+    }
 
 private:
     struct Impl;
+
     std::unique_ptr<Impl> m_impl;
 
     GNSSConfig m_config;
+
     GenerationStats m_stats;
-    std::vector<uint8_t> m_data;
+
+    std::vector<std::uint8_t> m_data;
+
     bool m_initialized = false;
 };
 
-//----------------------------------------------------------------------
-// Utility Functions
-//----------------------------------------------------------------------
 
+/**
+ * Utility functions.
+ */
 namespace Utils {
-    bool utcToGpsTime(int year, int month, int day, int hour, int minute,
-                      double second, int& week, int& msOfWeek);
 
-    void llaToEcef(double lat, double lon, double alt,
-                   double& x, double& y, double& z);
-    void ecefToLla(double x, double y, double z,
-                   double& lat, double& lon, double& alt);
+bool utcToGpsTime(
+    int year,
+    int month,
+    int day,
+    int hour,
+    int minute,
+    double second,
+    double& gpsWeek,
+    double& gpsSeconds
+);
 
-    double calculateElevation(double receiverLat, double receiverLon, double receiverAlt,
-                              double satX, double satY, double satZ);
-    double calculateAzimuth(double receiverLat, double receiverLon, double receiverAlt,
-                            double satX, double satY, double satZ);
-    double calculateDistance(double x1, double y1, double z1,
-                             double x2, double y2, double z2);
-    double calculateDoppler(double freq, double relativeSpeed);
+void llaToEcef(
+    double latitudeDeg,
+    double longitudeDeg,
+    double altitudeM,
+    double& x,
+    double& y,
+    double& z
+);
 
-    std::string getCurrentUTC();
-    std::string formatTime(const TimeConfig& time);
-}
+void ecefToLla(
+    double x,
+    double y,
+    double z,
+    double& latitudeDeg,
+    double& longitudeDeg,
+    double& altitudeM
+);
+
+double calculateElevation(
+    double receiverX,
+    double receiverY,
+    double receiverZ,
+    double satelliteX,
+    double satelliteY,
+    double satelliteZ
+);
+
+double calculateAzimuth(
+    double receiverX,
+    double receiverY,
+    double receiverZ,
+    double satelliteX,
+    double satelliteY,
+    double satelliteZ
+);
+
+double calculateDistance(
+    double receiverX,
+    double receiverY,
+    double receiverZ,
+    double satelliteX,
+    double satelliteY,
+    double satelliteZ
+);
+
+double calculateDoppler(
+    double carrierFrequency,
+    double rangeRate
+);
+
+std::string getCurrentUTC();
+
+std::string formatTime(
+    const TimeConfig& time
+);
+
+} // namespace Utils
 
 } // namespace gnss
 
-//----------------------------------------------------------------------
-// C Interface (global scope, C linkage)
-//----------------------------------------------------------------------
 
-#ifdef __cplusplus
+/*
+ * C API
+ *
+ * The C API remains available for applications that cannot use
+ * the C++ interface.
+ */
 extern "C" {
-#endif
 
-// ---- Batch generator ----
 typedef struct GNSSGeneratorHandle GNSSGeneratorHandle;
 
-GNSSGeneratorHandle* gnss_create_generator(void);
-void gnss_destroy_generator(GNSSGeneratorHandle* handle);
-int  gnss_init_from_json(GNSSGeneratorHandle* handle, const char* jsonFile);
-int  gnss_generate(GNSSGeneratorHandle* handle, double durationSeconds);
-int  gnss_save(GNSSGeneratorHandle* handle, const char* filename);
-int  gnss_get_data_size(GNSSGeneratorHandle* handle);          // legacy: always 0
-const uint8_t* gnss_get_data(GNSSGeneratorHandle* handle);     // legacy: always NULL
-void gnss_get_stats(GNSSGeneratorHandle* handle, double* duration, double* sizeMB);
+/**
+ * Create/destroy generator.
+ */
+GNSSGeneratorHandle* gnss_create_generator();
 
-// ---- Streaming (1 ms blocks of complex float IQ, interleaved I,Q) ----
+void gnss_destroy_generator(
+    GNSSGeneratorHandle* generator
+);
+
+/**
+ * JSON initialization.
+ */
+int gnss_init_from_json(
+    GNSSGeneratorHandle* generator,
+    const char* json_file
+);
+
+/**
+ * Generate complete simulation.
+ */
+int gnss_generate(
+    GNSSGeneratorHandle* generator,
+    double duration_seconds
+);
+
+/**
+ * Save generated output.
+ */
+int gnss_save(
+    GNSSGeneratorHandle* generator,
+    const char* filename
+);
+
+/**
+ * Retrieve basic statistics.
+ */
+int gnss_get_stats(
+    GNSSGeneratorHandle* generator,
+    double* duration,
+    double* size_mb
+);
+
+
+/*
+ * Streaming API
+ */
+
 typedef struct gnss_stream gnss_stream;
 
 typedef struct {
-    const char* config_file;          // JSON
-    int   write_bin;                  // 1 -> clean .bin is written as well
-    const char* bin_file;             // NULL/"" -> from JSON
-    int   write_tag;
-    int   multi_thread;               // default 1
-    int   n_threads;                  // 0 -> auto
-    int   verbose;
-    int   actualize_rinex;            // default 1
-    unsigned long long noise_seed;    // default 1
-    float gain;                       // default 1.0 (scales the stream, not the .bin)
+    const char* config_file;
+
+    int write_bin;
+
+    const char* bin_file;
+
+    int write_tag;
+
+    int multi_thread;
+
+    int n_threads;
+
+    int verbose;
+
+    int actualize_rinex;
+
+    unsigned long long noise_seed;
+
+    float gain;
 } gnss_stream_options;
 
 typedef struct {
     double sample_rate_hz;
+
     double center_freq_hz;
-    size_t samples_per_block;         // per 1 ms
-    size_t total_blocks;              // trajectory length in ms
-    int    n_channels;
+
+    size_t samples_per_block;
+
+    size_t total_blocks;
+
+    int n_channels;
 } gnss_stream_info;
 
-void         gnss_stream_options_default(gnss_stream_options* opt);
-gnss_stream* gnss_stream_open(const gnss_stream_options* opt);   // NULL on error -> gnss_last_error()
-int          gnss_stream_get_info(gnss_stream* s, gnss_stream_info* info);
-// Writes up to nSamples complex samples (2*nSamples floats) to iq. Returns samples written; 0 = end/error.
-size_t       gnss_stream_read(gnss_stream* s, float* iq, size_t nSamples);
-void         gnss_stream_close(gnss_stream* s);
-const char*  gnss_last_error(void);                              // thread-local
+void gnss_stream_options_default(
+    gnss_stream_options* options
+);
 
-#ifdef __cplusplus
-}
-#endif
+gnss_stream* gnss_stream_open(
+    const gnss_stream_options* options
+);
+
+int gnss_stream_get_info(
+    gnss_stream* stream,
+    gnss_stream_info* info
+);
+
+size_t gnss_stream_read(
+    gnss_stream* stream,
+    void* out,
+    size_t samples
+);
+
+void gnss_stream_close(
+    gnss_stream* stream
+);
+
+const char* gnss_last_error(void);
+
+} // extern "C"
 
 #endif // GNSS_LIB_H
