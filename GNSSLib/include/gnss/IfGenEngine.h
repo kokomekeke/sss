@@ -4,13 +4,15 @@
 //
 // Ket setup-ut van:
 //   1) JSON alapu:      IfGenOptions + Init(const IfGenOptions&)      -- a JSON-t a library olvassa be.
-//   2) Strukturalt:      IfGenParams  + Init(const IfGenParams&)      -- a hivo fel (pl. SCG) allitja
-//      ossze a parametereket a sajat (pl. MQTT-n erkezo) formatumabol; a library ekkor semmilyen
-//      JSON-t nem olvas. Ez az ut valositja meg azt, hogy "a setup fuggveny vegye at a parametereket,
-//      ne a signalsim/gnss oldal olvassa ki a hivo sajat formatumat".
+//   2) Strukturalt:     IfGenParams  + Init(const IfGenParams&)       -- a hivo fel allitja ossze a
+//      parametereket; a library ekkor semmilyen JSON-t nem olvas.
 //
-// ValidateIfGenParams() a teljes motor felepitese (muholdcsatornak, RINEX beolvasas) nelkul ellenorzi
-// a parametereket, hogy hiba eseten meg a felvetel/teszt elfogadasa elott kiderulhessen.
+// Ketfele trajektoria-mod van (mindket setup-utnal):
+//   a) szegmens-mod : kezdopozicio + kezdosebesseg + szegmenslista (ConstSpeed, ConstAcc, ...)
+//   b) waypoint-mod : pontok listaja (opcionalis idovel / sebesseggel), linearis vagy spline
+//      interpolacioval. Ha van waypoint, a position/velocity/trajectory[] NEM szamit.
+//
+// ValidateIfGenParams() a teljes motor felepitese nelkul ellenorzi a parametereket.
 #pragma once
 #include <complex>
 #include <cstddef>
@@ -21,7 +23,7 @@
 #include <vector>
 
 // ============================================================================
-// JSON alapu setup (meglevo ut, valtozatlan)
+// JSON alapu setup
 // ============================================================================
 
 struct IfGenOptions {
@@ -39,7 +41,7 @@ struct IfGenOptions {
 };
 
 // ============================================================================
-// Strukturalt setup: a hivo fel epiti fel a sajat formatumabol.
+// Strukturalt setup
 // ============================================================================
 
 // UTC ido.
@@ -52,41 +54,54 @@ struct IfGenTime {
     double second = 0.0;
 };
 
-// Kezdopozicio, fokban / meterben.
+// Kezdopozicio, fokban / meterben (csak szegmens-modban szamit).
 struct IfGenPosition {
     double latitudeDeg  = 0.0;
     double longitudeDeg = 0.0;
     double altitudeM    = 0.0;
 };
 
-// Kezdosebesseg. course: 0 = eszak, 90 = kelet.
+// Kezdosebesseg. course: 0 = eszak, 90 = kelet (csak szegmens-modban szamit).
 struct IfGenVelocity {
     double speedMps  = 0.0;
     double courseDeg = 0.0;
 };
 
-// A CTrajectory altal tamogatott szegmens-tipusok.
-// Ezek a SignalSim Trajectory.h TrajectoryType enumeratorait tukrozik.
-// A VerticalAcc es Jerk jelenleg a ConstAcc-re vannak mappelve (lasd IfGenEngine.cpp),
-// mert nem minden SignalSim build tartalmazza a megfelelo enumeratorokat.
+// A SignalSim Trajectory.h szegmens-tipusai.
 enum class IfGenTrajectoryType {
     ConstSpeed,
     ConstAcc,
-    VerticalAcc,    // -> TrajTypeConstAcc (ha nincs dedikalt SignalSim tipus)
-    Jerk,           // -> TrajTypeConstAcc (ha nincs dedikalt SignalSim tipus)
+    VerticalAcc,
+    Jerk,
     HorizontalTurn
 };
 
 struct IfGenTrajectorySegment {
     IfGenTrajectoryType type = IfGenTrajectoryType::ConstSpeed;
     double durationS     = 0.0;   // szegmens hossza, s
-    double speedMps      = 0.0;   // ConstSpeed eseten
-    double accelMps2     = 0.0;   // ConstAcc / VerticalAcc eseten
-    double jerkMps3      = 0.0;   // Jerk eseten (informativ; SignalSim ConstAcc-re mappeljuk)
-    double courseDeg     = 0.0;   // opcionalis irany (informativ; nem kerul at a CTrajectory-ba)
-    double radiusM       = 0.0;   // HorizontalTurn eseten opcionalis (informativ)
-    double turnRateDegS  = 0.0;   // HorizontalTurn eseten, elojeles fok/s
+    double speedMps      = 0.0;   // ConstSpeed (a SignalSim a meglevo sebesseget tartja, ezt az erteket nem hasznalja)
+    double accelMps2     = 0.0;   // ConstAcc / VerticalAcc
+    double jerkMps3      = 0.0;   // Jerk (m/s^3)
+    double courseDeg     = 0.0;   // informativ, nem kerul at a CTrajectory-ba
+    double radiusM       = 0.0;   // HorizontalTurn: ha != 0, ez hatarozza meg a fordulast (elojeles)
+    double turnRateDegS  = 0.0;   // HorizontalTurn: elojeles fok/s (ha radiusM == 0)
 };
+
+// ---------------------------------------------------------------------------
+// Waypoint-mod
+// ---------------------------------------------------------------------------
+
+// Egy utvonalpont. Fok / meter / masodperc.
+struct IfGenWaypoint {
+    double latitudeDeg  = 0.0;
+    double longitudeDeg = 0.0;
+    double altitudeM    = 0.0;
+    double timeS        = -1.0;  // <0: nincs megadva. Ha megadod, MINDEN pontnal kell (szigoruan novekvo).
+    double speedMps     = -1.0;  // <0: nincs megadva. Az ebbol a pontbol indulo szakasz sebessege
+                                 // (csak ha nincs timeS)
+};
+
+enum class IfGenWaypointInterp { Linear, Spline };
 
 // Tamogatott GNSS jelek. A nev egyertelmuen tartalmazza a rendszert is.
 enum class IfGenSignal {
@@ -96,7 +111,6 @@ enum class IfGenSignal {
     GLO_G1, GLO_G2, GLO_G3
 };
 
-// GnssSystem tukor.
 enum class IfGenSystem {
     GPS,
     BDS,
@@ -105,7 +119,7 @@ enum class IfGenSystem {
 };
 
 struct IfGenSignalSelect {
-    IfGenSignal signal;
+    IfGenSignal signal = IfGenSignal::GPS_L1CA;
     IfGenSystem system = IfGenSystem::GPS;   // informativ; a signal neve is hordozza
     bool        enable = true;
 };
@@ -113,24 +127,30 @@ struct IfGenSignalSelect {
 enum class IfGenFormat { IQ2, IQ4, IQ8, IQ16 };
 
 struct IfGenOutput {
-    double      sampleRateHz    = 4.0e6;
-    double      centerFreqHz    = 1575.42e6;
-    IfGenFormat format          = IfGenFormat::IQ8;
+    double      sampleRateHz     = 4.0e6;
+    double      centerFreqHz     = 1575.42e6;
+    IfGenFormat format           = IfGenFormat::IQ8;
     double      elevationMaskDeg = 5.0;
     std::string binFile;
 };
 
 struct IfGenPower {
-    double noiseFloorDbm  = -172.0;
-    double initCN0DbHz    = 47.0;
+    double noiseFloorDbm   = -172.0;
+    double initCN0DbHz     = 47.0;
     bool   elevationAdjust = true;
 };
 
 struct IfGenParams {
     IfGenTime     time;
-    IfGenPosition position;
-    IfGenVelocity velocity;
-    std::vector<IfGenTrajectorySegment> trajectory;   // legalabb 1 elem
+    IfGenPosition position;                            // szegmens-mod
+    IfGenVelocity velocity;                            // szegmens-mod
+    std::vector<IfGenTrajectorySegment> trajectory;    // szegmens-mod
+
+    // Waypoint-mod: ha nem ures, a position/velocity/trajectory[] nem szamit
+    // (a kezdopont az elso waypoint). trajectory[] ekkor ures kell legyen.
+    std::vector<IfGenWaypoint> waypoints;
+    IfGenWaypointInterp waypointInterp = IfGenWaypointInterp::Spline;
+    double waypointDefaultSpeedMps = 0.0;   // ha nincs timeS es a pontnal nincs speedMps
 
     std::string ephemerisFile;
     bool        actualizeRinex = true;

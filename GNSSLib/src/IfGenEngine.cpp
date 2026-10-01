@@ -3,15 +3,16 @@
 //
 // Ket setup-ut van, amik ugyanabba a kozos vegbe (FinishSetup) futnak bele:
 //   - Setup(IfGenOptions)      : JSON-t olvas be (AssignParameters), mint eddig.
-//   - SetupFromParams(IfGenParams): semmilyen JSON-t nem olvas, a hivo fel altal mar
-//     osszeallitott strukturalt parameterekbol tolti fel ugyanazokat a SignalSim
-//     objektumokat (OUTPUT_PARAM, CTrajectory, CPowerControl, UTC_TIME, ...).
+//   - SetupFromParams(IfGenParams): semmilyen JSON-t nem olvas.
 //
-// FONTOS: ez a fajl NEM modositja a SignalSim forrasfajljait. A SignalSim fejlecei
-// altal kibocsatott figyelmezteteseket (unused-parameter, return-type,
-// delete-non-virtual-dtor) pragma-val elnyomjuk a SignalSim include kore.
+// Ketfele trajektoria-forras:
+//   - szegmens-mod : SignalSim CTrajectory (kezdopont + kezdosebesseg + szegmensek)
+//   - waypoint-mod : WaypointPath (pontlista, linearis / spline), a SignalSim-et nem erinti
+//
+// FONTOS: ez a fajl NEM modositja a SignalSim forrasfajljait.
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -29,16 +30,6 @@
 #include <omp.h>
 #endif
 
-/*
- * A SignalSim fejlecei nehany figyelmeztetest adnak (pl. BC NavBit
- * SetIonoUtc nem hasznalt parameterek, JsonParser SetIndent hianyzo
- * return, NavBit absztrakt osztaly nem virtualis destruktorral).
- * Mivel a SignalSim forrasait nem modosithatjuk, itt lokalisan
- * elnyomjuk ezeket a figyelmezteteseket.
- *
- * A pragma csak a kovetkezo include-okra hat, es a push/pop paros
- * biztositja, hogy a mi sajat kodunkra ne legyen hatassal.
- */
 #if defined(__GNUC__) || defined(__clang__)
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -72,19 +63,149 @@ enum DataBitType {
     DataBitSbas,
 };
 
-// Rendszerenkenti kozepfrekvenciak a jel-indexek sorrendjeben.
-// A tomb sorai: GPS, BDS, Galileo, GLONASS.
-// Az utolso dimenzio 8, hogy a GLONASS-nak is legyen helye (biztonsagi tartalek).
-//
-// FIGYELEM: GLO_G3 (CDMA L3) szandekosan NINCS benne, mert a SignalSim
-// Const.h nem garantaltan tartalmazza a FREQ_GLO_G3 / SIGNAL_INDEX_G3
-// szimbolumokat. A GLO_G3 jelet a ValidateIfGenParams() elutasitja.
+// Rendszerenkenti kozepfrekvenciak a jel-indexek sorrendjeben (GPS, BDS, Galileo, GLONASS).
+// GLO_G3 (CDMA L3) szandekosan nincs benne; a ValidateIfGenParams() elutasitja.
 const int SignalCenterFreq[][8] = {
     { FREQ_GPS_L1, FREQ_GPS_L1, FREQ_GPS_L2, FREQ_GPS_L2, FREQ_GPS_L5 },
     { FREQ_BDS_B1C, FREQ_BDS_B1I, FREQ_BDS_B2I, FREQ_BDS_B3I, FREQ_BDS_B2a, FREQ_BDS_B2b, FREQ_BDS_B2ab },
     { FREQ_GAL_E1, FREQ_GAL_E5a, FREQ_GAL_E5b, FREQ_GAL_E5, FREQ_GAL_E6 },
     { FREQ_GLO_G1, FREQ_GLO_G2, 0 },
 };
+
+// ============================================================================
+// Waypoint utvonal
+// ============================================================================
+
+class WaypointPath {
+public:
+    void Build(const std::vector<IfGenWaypoint>& wp, IfGenWaypointInterp interp, double defSpeed) {
+        const std::size_t n = wp.size();
+        spline = (interp == IfGenWaypointInterp::Spline) && n > 2;
+        P.resize(n);
+        T.assign(n, 0.0);
+        M.assign(n, std::array<double, 3>{ 0.0, 0.0, 0.0 });
+
+        for (std::size_t i = 0; i < n; i++) {
+            LLA_POSITION l;
+            l.lat = wp[i].latitudeDeg  * PI / 180.0;
+            l.lon = wp[i].longitudeDeg * PI / 180.0;
+            l.alt = wp[i].altitudeM;
+            KINEMATIC_INFO k = LlaToEcef(l);
+            P[i] = { k.x, k.y, k.z };
+        }
+
+        const bool timed = wp[0].timeS >= 0.0;
+        for (std::size_t i = 1; i < n; i++) {
+            if (timed) {
+                T[i] = wp[i].timeS - wp[0].timeS;
+            } else {
+                double dx = P[i][0] - P[i-1][0], dy = P[i][1] - P[i-1][1], dz = P[i][2] - P[i-1][2];
+                double dist = std::sqrt(dx*dx + dy*dy + dz*dz);
+                double v = wp[i-1].speedMps > 0.0 ? wp[i-1].speedMps : defSpeed;
+                T[i] = T[i-1] + std::max(dist / v, 1e-3);
+            }
+        }
+
+        // Catmull-Rom tangensek (nem egyenletes idokozre), a veg-pontokon egyoldali kulonbseg.
+        for (std::size_t i = 0; i < n; i++) {
+            std::size_t a = (i == 0) ? 0 : i - 1;
+            std::size_t b = (i == n - 1) ? n - 1 : i + 1;
+            for (int c = 0; c < 3; c++) M[i][c] = (P[b][c] - P[a][c]) / (T[b] - T[a]);
+        }
+    }
+
+    double Duration() const { return T.empty() ? 0.0 : T.back(); }
+
+    KINEMATIC_INFO At(double t) const {
+        t = std::min(std::max(t, 0.0), T.back());
+        std::size_t i = std::upper_bound(T.begin(), T.end(), t) - T.begin();
+        i = (i == 0) ? 0 : i - 1;
+        if (i > T.size() - 2) i = T.size() - 2;
+
+        const double h = T[i+1] - T[i];
+        const double u = (t - T[i]) / h;
+        double pos[3], vel[3];
+
+        for (int c = 0; c < 3; c++) {
+            if (!spline) {
+                pos[c] = P[i][c] + (P[i+1][c] - P[i][c]) * u;
+                vel[c] = (P[i+1][c] - P[i][c]) / h;
+            } else {
+                const double u2 = u*u, u3 = u2*u;
+                pos[c] = (2*u3 - 3*u2 + 1) * P[i][c]   + (u3 - 2*u2 + u) * h * M[i][c]
+                       + (-2*u3 + 3*u2)    * P[i+1][c] + (u3 - u2)       * h * M[i+1][c];
+                vel[c] = ((6*u2 - 6*u) * P[i][c]   + (3*u2 - 4*u + 1) * h * M[i][c]
+                        + (-6*u2 + 6*u) * P[i+1][c] + (3*u2 - 2*u)     * h * M[i+1][c]) / h;
+            }
+        }
+        KINEMATIC_INFO k{};
+        k.x = pos[0]; k.y = pos[1]; k.z = pos[2];
+        k.vx = vel[0]; k.vy = vel[1]; k.vz = vel[2];
+        return k;
+    }
+
+private:
+    bool spline = false;
+    std::vector<std::array<double, 3>> P, M;
+    std::vector<double> T;
+};
+
+// Waypointok ellenorzese (kozos a JSON es a struct ut kozott).
+void ValidateWaypoints(const std::vector<IfGenWaypoint>& w, double defSpeed,
+                       std::vector<std::string>& errors) {
+    if (w.size() < 2) { errors.push_back("waypoints needs at least 2 points"); return; }
+
+    std::size_t timed = 0;
+    for (auto& p : w) if (p.timeS >= 0.0) timed++;
+    if (timed != 0 && timed != w.size())
+        errors.push_back("waypoints: timeS must be given for all points or for none");
+
+    for (std::size_t i = 0; i < w.size(); i++) {
+        const std::string id = "waypoints[" + std::to_string(i) + "]";
+        if (w[i].latitudeDeg < -90 || w[i].latitudeDeg > 90)
+            errors.push_back(id + ".latitudeDeg out of range");
+        if (w[i].longitudeDeg < -180 || w[i].longitudeDeg > 180)
+            errors.push_back(id + ".longitudeDeg out of range");
+        if (timed == w.size() && i > 0 && w[i].timeS <= w[i-1].timeS)
+            errors.push_back(id + ".timeS must be strictly increasing");
+        if (timed == 0 && i + 1 < w.size() && !(w[i].speedMps > 0.0) && !(defSpeed > 0.0))
+            errors.push_back(id + ": no timeS and no speed (set speedMps or waypointDefaultSpeedMps)");
+    }
+}
+
+// "trajectory" -> "waypointList" kiolvasasa a JSON fabol (a SignalSim JsonInterpreter-t nem erintjuk).
+bool ParseWaypointsJson(JsonObject *root, std::vector<IfGenWaypoint>& out,
+                        IfGenWaypointInterp& interp, double& defSpeed) {
+    out.clear();
+    interp = IfGenWaypointInterp::Spline;
+    defSpeed = 0.0;
+
+    for (JsonObject *o = root->GetFirstObject(); o; o = o->GetNextObject()) {
+        if (std::strcmp(o->Key, "trajectory") != 0) continue;
+        for (JsonObject *t = o->GetFirstObject(); t; t = t->GetNextObject()) {
+            if (!std::strcmp(t->Key, "interpolation") && t->Type == JsonObject::ValueTypeString)
+                interp = std::strcmp(t->String, "linear") == 0 ? IfGenWaypointInterp::Linear
+                                                               : IfGenWaypointInterp::Spline;
+            else if (!std::strcmp(t->Key, "defaultSpeed"))
+                defSpeed = GET_DOUBLE_VALUE(t);
+            else if (!std::strcmp(t->Key, "waypointList") && t->Type == JsonObject::ValueTypeArray) {
+                for (JsonObject *e = t->GetFirstObject(); e; e = e->GetNextObject()) {
+                    if (e->Type != JsonObject::ValueTypeObject) continue;
+                    IfGenWaypoint w;
+                    for (JsonObject *f = e->GetFirstObject(); f; f = f->GetNextObject()) {
+                        if      (!std::strcmp(f->Key, "latitude"))  w.latitudeDeg  = GET_DOUBLE_VALUE(f);
+                        else if (!std::strcmp(f->Key, "longitude")) w.longitudeDeg = GET_DOUBLE_VALUE(f);
+                        else if (!std::strcmp(f->Key, "altitude"))  w.altitudeM    = GET_DOUBLE_VALUE(f);
+                        else if (!std::strcmp(f->Key, "time"))      w.timeS        = GET_DOUBLE_VALUE(f);
+                        else if (!std::strcmp(f->Key, "speed"))     w.speedMps     = GET_DOUBLE_VALUE(f);
+                    }
+                    out.push_back(w);
+                }
+            }
+        }
+    }
+    return !out.empty();
+}
 
 // ============================================================================
 // Kvantalas
@@ -218,13 +339,9 @@ void WriteTagFile(const std::string &path, const OUTPUT_PARAM &o) {
     std::fclose(t);
 }
 
-} // namespace
-
 // ============================================================================
 // RNG: gyors, chunkonkent (seed, blokk, chunk) alapu, szalfuggetlenul reprodukalhato
 // ============================================================================
-
-namespace {
 
 struct SplitMix64 {
     std::uint64_t s;
@@ -259,30 +376,30 @@ bool ValidateIfGenParams(const IfGenParams &p, std::vector<std::string> &errors)
     if (p.time.minute < 0 || p.time.minute > 59) errors.push_back("time.minute out of range [0,59]");
     if (p.time.second < 0.0 || p.time.second >= 60.0) errors.push_back("time.second out of range [0,60)");
 
-    if (p.position.latitudeDeg < -90.0 || p.position.latitudeDeg > 90.0)
-        errors.push_back("position.latitudeDeg out of range [-90,90]");
-    if (p.position.longitudeDeg < -180.0 || p.position.longitudeDeg > 180.0)
-        errors.push_back("position.longitudeDeg out of range [-180,180]");
+    const bool hasSeg = !p.trajectory.empty();
+    const bool hasWp  = !p.waypoints.empty();
 
-    if (p.trajectory.empty()) {
-        errors.push_back("trajectory must have at least one segment");
+    if (hasSeg && hasWp)
+        errors.push_back("specify either trajectory[] or waypoints[], not both");
+    else if (!hasSeg && !hasWp)
+        errors.push_back("trajectory[] or waypoints[] must be given");
+
+    if (hasWp) {
+        ValidateWaypoints(p.waypoints, p.waypointDefaultSpeedMps, errors);
     } else {
-        for (std::size_t i = 0; i < p.trajectory.size(); i++) {
-            if (p.trajectory[i].durationS <= 0.0)
-                errors.push_back("trajectory[" + std::to_string(i) + "].durationS must be > 0");
+        // A position / velocity csak szegmens-modban szamit.
+        if (p.position.latitudeDeg < -90.0 || p.position.latitudeDeg > 90.0)
+            errors.push_back("position.latitudeDeg out of range [-90,90]");
+        if (p.position.longitudeDeg < -180.0 || p.position.longitudeDeg > 180.0)
+            errors.push_back("position.longitudeDeg out of range [-180,180]");
 
-            /*
-             * VerticalAcc es Jerk: a jelenlegi SignalSim Const.h/Trajectory.h
-             * nem garantaltan tartalmaz dedikalt enumeratorokat ezekre, ezert
-             * a SetupFromParams ConstAcc-re mappelja oket. Itt csak
-             * figyelmeztetunk, de nem utasitjuk el (a felhasznalo dontese).
-             */
-            if (p.trajectory[i].type == IfGenTrajectoryType::VerticalAcc) {
-                // informational; fallback to ConstAcc in SetupFromParams
-            }
-            if (p.trajectory[i].type == IfGenTrajectoryType::Jerk) {
-                // informational; fallback to ConstAcc in SetupFromParams
-            }
+        for (std::size_t i = 0; i < p.trajectory.size(); i++) {
+            const auto &s = p.trajectory[i];
+            const std::string id = "trajectory[" + std::to_string(i) + "]";
+            if (s.durationS <= 0.0)
+                errors.push_back(id + ".durationS must be > 0");
+            if (s.type == IfGenTrajectoryType::HorizontalTurn && s.radiusM == 0.0 && s.turnRateDegS == 0.0)
+                errors.push_back(id + ": HorizontalTurn needs radiusM or turnRateDegS");
         }
     }
 
@@ -298,11 +415,7 @@ bool ValidateIfGenParams(const IfGenParams &p, std::vector<std::string> &errors)
     for (auto &s : p.signals) if (s.enable) { anyEnabled = true; break; }
     if (!anyEnabled) errors.push_back("no enabled signal in signals[]");
 
-    /*
-     * GLO_G3 (GLONASS CDMA L3) elutasitasa: a SignalSim Const.h nem
-     * garantaltan tartalmazza a FREQ_GLO_G3 / SIGNAL_INDEX_G3 szimbolumokat,
-     * ezert ez a jel jelenleg nem tamogatott ebben a buildben.
-     */
+    // GLO_G3 (GLONASS CDMA L3) nem tamogatott ebben a buildben.
     for (auto &s : p.signals) {
         if (s.enable && s.signal == IfGenSignal::GLO_G3) {
             errors.push_back("GLO_G3 signal is not supported by this SignalSim build "
@@ -334,6 +447,11 @@ struct IfGenEngine::Impl {
     CPowerControl PowerControl;
     CNavData NavData;
     OUTPUT_PARAM OutputParam{};
+
+    // Waypoint-mod
+    WaypointPath Path;
+    bool useWaypoints = false;
+    long long pathMs = 0;
 
     UTC_TIME UtcTime{};
     LLA_POSITION StartPos{};
@@ -373,6 +491,27 @@ struct IfGenEngine::Impl {
     }
 
     // ========================================================================
+    // Utvonal-absztrakcio: szegmens-mod vagy waypoint-mod
+    // ========================================================================
+
+    double TrajDuration() {
+        return useWaypoints ? Path.Duration() : Trajectory.GetTimeLength();
+    }
+
+    void TrajReset() {
+        pathMs = 0;
+        if (!useWaypoints) Trajectory.ResetTrajectoryTime();
+    }
+
+    bool TrajNext(double dt, KINEMATIC_INFO &k) {
+        if (!useWaypoints) return Trajectory.GetNextPosVelECEF(dt, k);
+        ++pathMs;                                           // egesz ms-ben szamolunk, nincs csuszas
+        if (pathMs > std::llround(Path.Duration() * 1000.0)) return false;
+        k = Path.At(pathMs * 0.001);
+        return true;
+    }
+
+    // ========================================================================
     // 1) JSON alapu setup
     // ========================================================================
 
@@ -386,8 +525,28 @@ struct IfGenEngine::Impl {
         SetJsonFilePath(opt.configFile.c_str());
         JsonObject *Object = JsonTree.GetRootObject();
 
+        // Waypoint-mod: a "trajectory" -> "waypointList" kulon kiolvasva.
+        {
+            std::vector<IfGenWaypoint> wps;
+            IfGenWaypointInterp interp = IfGenWaypointInterp::Spline;
+            double defSpeed = 0.0;
+            if (ParseWaypointsJson(Object, wps, interp, defSpeed)) {
+                std::vector<std::string> errs;
+                ValidateWaypoints(wps, defSpeed, errs);
+                if (!errs.empty()) {
+                    std::string msg = "invalid waypointList:";
+                    for (auto &e : errs) msg += "\n  - " + e;
+                    throw std::runtime_error(msg);
+                }
+                useWaypoints = true;
+                Path.Build(wps, interp, defSpeed);
+            }
+        }
+
+        // Waypoint-modban is lefut (ido, output, power, ephemeris miatt kell);
+        // a trajectory-bol csak a "name" hasznosul, a SetTrajectory FALSE-t ad, de ez artalmatlan.
         if (!AssignParameters(Object, &UtcTime, &StartPos, &StartVel, &Trajectory, &NavData,
-                              &OutputParam, &PowerControl, NULL)) {
+                              &OutputParam, &PowerControl, NULL) && !useWaypoints) {
             std::fprintf(stderr, "[IfGen] WARNING: AssignParameters reported problems in '%s'\n",
                          opt.configFile.c_str());
         }
@@ -433,82 +592,71 @@ struct IfGenEngine::Impl {
         UtcTime.Minute = p.time.minute;
         UtcTime.Second = p.time.second;
 
-        // ---- kezdopozicio / sebesseg ----
-        StartPos.lat = p.position.latitudeDeg * PI / 180.0;
-        StartPos.lon = p.position.longitudeDeg * PI / 180.0;
-        StartPos.alt = p.position.altitudeM;
-
-        StartVel.speed = p.velocity.speedMps;
-        StartVel.course = p.velocity.courseDeg * PI / 180.0;
-        SpeedCourseToEnu(StartVel);
-
         // ---- trajektoria ----
-        Trajectory.SetInitPosVel(StartPos, StartVel, false);
-        for (const auto &seg : p.trajectory) {
-            TrajectoryDataType dataType2 = TrajDataSpeed;
-            TrajectoryType trajType = TrajTypeConstSpeed;
-            double data2 = seg.speedMps;
+        if (!p.waypoints.empty()) {
+            // Waypoint-mod: a kezdopont az elso waypoint (FinishSetup allitja be).
+            useWaypoints = true;
+            Path.Build(p.waypoints, p.waypointInterp, p.waypointDefaultSpeedMps);
+        } else {
+            StartPos.lat = p.position.latitudeDeg * PI / 180.0;
+            StartPos.lon = p.position.longitudeDeg * PI / 180.0;
+            StartPos.alt = p.position.altitudeM;
 
-            switch (seg.type) {
-            case IfGenTrajectoryType::ConstSpeed:
-                trajType = TrajTypeConstSpeed;
-                dataType2 = TrajDataSpeed;
-                data2 = seg.speedMps;
-                break;
+            StartVel.speed = p.velocity.speedMps;
+            StartVel.course = p.velocity.courseDeg * PI / 180.0;
+            SpeedCourseToEnu(StartVel);
 
-            case IfGenTrajectoryType::ConstAcc:
-                trajType = TrajTypeConstAcc;
-                dataType2 = TrajDataAcceleration;
-                data2 = seg.accelMps2;
-                break;
+            Trajectory.SetInitPosVel(StartPos, StartVel, false);
+            for (std::size_t i = 0; i < p.trajectory.size(); i++) {
+                const auto &seg = p.trajectory[i];
+                TrajectoryDataType dataType2 = TrajDataSpeed;
+                TrajectoryType trajType = TrajTypeConstSpeed;
+                double data2 = seg.speedMps;
 
-            case IfGenTrajectoryType::VerticalAcc:
-                /*
-                 * A SignalSim Trajectory.h nem garantaltan tartalmaz dedikalt
-                 * VerticalAcc enumeratort. A legkozelebbi biztos megfelelo a
-                 * ConstAcc + TrajDataAcceleration. A felhasznalot egyszer
-                 * figyelmeztetjuk.
-                 */
-                if (opt.verbose) {
-                    std::fprintf(stderr,
-                        "[IfGen] WARNING: VerticalAcc mapped to ConstAcc "
-                        "(no dedicated SignalSim enumerator)\n");
+                switch (seg.type) {
+                case IfGenTrajectoryType::ConstSpeed:
+                    // A SignalSim ConstSpeed szegmense a meglevo sebesseget tartja;
+                    // a 2. parametert nem hasznalja.
+                    trajType = TrajTypeConstSpeed;
+                    dataType2 = TrajDataSpeed;
+                    data2 = seg.speedMps;
+                    break;
+
+                case IfGenTrajectoryType::ConstAcc:
+                    trajType = TrajTypeConstAcc;
+                    dataType2 = TrajDataAcceleration;
+                    data2 = seg.accelMps2;
+                    break;
+
+                case IfGenTrajectoryType::VerticalAcc:
+                    trajType = TrajTypeVerticalAcc;
+                    dataType2 = TrajDataAcceleration;
+                    data2 = seg.accelMps2;
+                    break;
+
+                case IfGenTrajectoryType::Jerk:
+                    trajType = TrajTypeJerk;
+                    dataType2 = TrajDataAccRate;        // m/s^3, NEM kell radianba konvertalni
+                    data2 = seg.jerkMps3;
+                    break;
+
+                case IfGenTrajectoryType::HorizontalTurn:
+                    trajType = TrajTypeHorizontalCircular;
+                    if (seg.radiusM != 0.0) {
+                        dataType2 = TrajDataRadius;
+                        data2 = seg.radiusM;
+                    } else {
+                        dataType2 = TrajDataAngularRate;
+                        data2 = seg.turnRateDegS * PI / 180.0;
+                    }
+                    break;
                 }
-                trajType = TrajTypeConstAcc;
-                dataType2 = TrajDataAcceleration;
-                data2 = seg.accelMps2;
-                break;
 
-            case IfGenTrajectoryType::Jerk:
-                /*
-                 * Hasonloan: Jerk -> ConstAcc fallback, mert a SignalSim
-                 * TrajectoryDataType nem garantaltan tartalmaz TrajDataJerk-et.
-                 */
-                if (opt.verbose) {
-                    std::fprintf(stderr,
-                        "[IfGen] WARNING: Jerk mapped to ConstAcc "
-                        "(no dedicated SignalSim enumerator)\n");
-                }
-                trajType = TrajTypeConstAcc;
-                dataType2 = TrajDataAcceleration;
-                data2 = seg.jerkMps3;
-                break;
-
-            case IfGenTrajectoryType::HorizontalTurn:
-                trajType = TrajTypeHorizontalCircular;
-                dataType2 = TrajDataAngularRate;
-                data2 = seg.turnRateDegS * PI / 180.0;
-                break;
+                int rc = Trajectory.AppendTrajectory(trajType, TrajDataTimeSpan, seg.durationS, dataType2, data2);
+                if (rc != TRAJECTORY_NO_ERR)
+                    throw std::runtime_error("trajectory[" + std::to_string(i) +
+                                             "] rejected by SignalSim (error code " + std::to_string(rc) + ")");
             }
-
-            Trajectory.AppendTrajectory(trajType, TrajDataTimeSpan, seg.durationS, dataType2, data2);
-
-            /*
-             * A courseDeg / radiusM mezok egyelore nem kerulnek at a
-             * CTrajectory-ba, mert a SignalSim TrajectoryDataType
-             * enumeratorai nem garantaltan tartalmazzak a TrajDataCourse /
-             * TrajDataRadius ertekeket. Ezek informativak a hivo fel szamara.
-             */
         }
 
         // ---- kimenet ----
@@ -533,14 +681,8 @@ struct IfGenEngine::Impl {
             if (!sel.enable) continue;
             GnssSystem sys; int idx;
             if (!MapSignal(sel.signal, sys, idx)) {
-                /*
-                 * GLO_G3 ide esik. A ValidateIfGenParams mar elutasitotta
-                 * volna, de vedelmi vonalkent itt is kihagyjuk.
-                 */
-                if (opt.verbose) {
-                    std::fprintf(stderr,
-                        "[IfGen] WARNING: unsupported signal skipped (GLO_G3?)\n");
-                }
+                if (opt.verbose)
+                    std::fprintf(stderr, "[IfGen] WARNING: unsupported signal skipped (GLO_G3?)\n");
                 continue;
             }
             OutputParam.FreqSelect[sys] |= (1u << idx);
@@ -584,14 +726,7 @@ struct IfGenEngine::Impl {
         case IfGenSignal::GAL_E6:   sys = GalileoSystem; idx = SIGNAL_INDEX_E6;  return true;
         case IfGenSignal::GLO_G1:   sys = GlonassSystem; idx = SIGNAL_INDEX_G1;  return true;
         case IfGenSignal::GLO_G2:   sys = GlonassSystem; idx = SIGNAL_INDEX_G2;  return true;
-        case IfGenSignal::GLO_G3:
-            /*
-             * GLO_G3 (CDMA L3) nem tamogatott ebben a buildben, mert a
-             * SignalSim Const.h nem garantaltan tartalmazza a
-             * SIGNAL_INDEX_G3 / FREQ_GLO_G3 szimbolumokat.
-             * A ValidateIfGenParams() mar elutasitotta.
-             */
-            return false;
+        case IfGenSignal::GLO_G3:   return false;   // nem tamogatott ebben a buildben
         }
         return false;
     }
@@ -608,12 +743,19 @@ struct IfGenEngine::Impl {
 #endif
         blockIndex = 0;
 
-        Trajectory.ResetTrajectoryTime();
+        TrajReset();
         CurTime = UtcToGpsTime(UtcTime);
         GLONASS_TIME GlonassTime = UtcToGlonassTime(UtcTime);
         GNSS_TIME BdsTime = UtcToBdsTime(UtcTime);
-        KINEMATIC_INFO CurPos = LlaToEcef(StartPos);
-        SpeedLocalToEcef(StartPos, StartVel, CurPos);
+
+        KINEMATIC_INFO CurPos;
+        if (useWaypoints) {
+            CurPos   = Path.At(0.0);
+            StartPos = EcefToLla(CurPos);
+        } else {
+            CurPos = LlaToEcef(StartPos);
+            SpeedLocalToEcef(StartPos, StartVel, CurPos);
+        }
 
         if (opt.writeBin && !opt.validateOnly) {
             writer = std::make_unique<BinWriter>();
@@ -729,7 +871,7 @@ struct IfGenEngine::Impl {
         info.sampleRateHz    = OutputParam.SampleFreq * 1000.0;
         info.centerFreqHz    = OutputParam.CenterFreq * 1000.0;
         info.samplesPerBlock = (std::size_t)OutputParam.SampleFreq;
-        info.totalBlocks     = (std::size_t)(Trajectory.GetTimeLength() * 1000);
+        info.totalBlocks     = (std::size_t)std::llround(TrajDuration() * 1000.0);
         info.nChannels       = nChannels;
         info.outputFile      = OutputParam.filename;
         info.formatBits      = (OutputParam.Format == OutputFormatIQ2)  ? 2
@@ -740,9 +882,10 @@ struct IfGenEngine::Impl {
         blk.resize(info.samplesPerBlock);
 
         if (opt.verbose) {
-            std::fprintf(stderr, "[IfGen] fs=%.4f MHz fc=%.4f MHz dur=%.2f s  SV: GPS %d BDS %d GAL %d GLO %d  channels: %d  threads: %d\n",
+            std::fprintf(stderr, "[IfGen] fs=%.4f MHz fc=%.4f MHz dur=%.2f s  SV: GPS %d BDS %d GAL %d GLO %d  channels: %d  threads: %d  trajectory: %s\n",
                          info.sampleRateHz / 1e6, info.centerFreqHz / 1e6, info.totalBlocks / 1000.0,
-                         GpsSatNumber, BdsSatNumber, GalSatNumber, GloSatNumber, nChannels, nThreads);
+                         GpsSatNumber, BdsSatNumber, GalSatNumber, GloSatNumber, nChannels, nThreads,
+                         useWaypoints ? "waypoints" : "segments");
         }
     }
 
@@ -810,7 +953,7 @@ struct IfGenEngine::Impl {
             case SIGNAL_INDEX_E5a: return NavBitArray[DataBitFNav];
             case SIGNAL_INDEX_E5b: return NavBitArray[DataBitINav];
             case SIGNAL_INDEX_E5:  return NavBitArray[DataBitFNav];
-            case SIGNAL_INDEX_E6:  return NavBitArray[DataBitECNav];
+            case SIGNAL_INDEX_E6:  return NavBitArray[DataBitECNav];   // FIGYELEM: nullptr (nincs ECNavBit peldanyositva)
             default:               return NavBitArray[DataBitINav];
             }
         case GlonassSystem:
@@ -859,7 +1002,7 @@ struct IfGenEngine::Impl {
     bool StepToNextMs() {
         KINEMATIC_INFO CurPos;
         PSIGNAL_POWER PowerList = NULL;
-        if (!Trajectory.GetNextPosVelECEF(0.001, CurPos)) return false;
+        if (!TrajNext(0.001, CurPos)) return false;
         int ListCount = PowerControl.GetPowerControlList(1, PowerList);
         if (++CurTime.MilliSeconds > 604800000) { CurTime.Week++; CurTime.MilliSeconds -= 604800000; }
         UpdateSatParamList(CurPos, ListCount, PowerList);

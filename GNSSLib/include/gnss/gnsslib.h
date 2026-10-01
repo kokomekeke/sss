@@ -12,37 +12,15 @@
 
 namespace gnss {
 
-/**
- * Supported GNSS signal types.
- */
+/** Supported GNSS signal types. */
 enum class SignalType {
-    GPS_L1CA,
-    GPS_L1C,
-    GPS_L2C,
-    GPS_L2P,
-    GPS_L5,
-
-    BDS_B1C,
-    BDS_B1I,
-    BDS_B2I,
-    BDS_B3I,
-    BDS_B2a,
-    BDS_B2b,
-
-    GAL_E1,
-    GAL_E5a,
-    GAL_E5b,
-    GAL_E5,
-    GAL_E6,
-
-    GLO_G1,
-    GLO_G2,
-    GLO_G3
+    GPS_L1CA, GPS_L1C, GPS_L2C, GPS_L2P, GPS_L5,
+    BDS_B1C, BDS_B1I, BDS_B2I, BDS_B3I, BDS_B2a, BDS_B2b,
+    GAL_E1, GAL_E5a, GAL_E5b, GAL_E5, GAL_E6,
+    GLO_G1, GLO_G2, GLO_G3
 };
 
-/**
- * GNSS constellation/system.
- */
+/** GNSS constellation/system. */
 enum class SystemType {
     GPS,
     BDS,
@@ -50,9 +28,7 @@ enum class SystemType {
     GLONASS
 };
 
-/**
- * Output sample format.
- */
+/** Output sample format. */
 enum class OutputFormat {
     IQ8,
     IQ16,
@@ -60,9 +36,7 @@ enum class OutputFormat {
     IQ2
 };
 
-/**
- * Trajectory segment type.
- */
+/** Trajectory segment type. */
 enum class TrajectoryType {
     ConstSpeed,
     ConstAcc,
@@ -71,9 +45,13 @@ enum class TrajectoryType {
     HorizontalTurn
 };
 
-/**
- * GNSS signal selection.
- */
+/** Waypoint interpolation mode. */
+enum class WaypointInterpolation {
+    Linear,   // egyenes szakaszok, a sebesseg a toresponton ugrik
+    Spline    // Catmull-Rom/Hermite, folytonos sebesseg
+};
+
+/** GNSS signal selection. */
 struct SignalConfig {
     SystemType system = SystemType::GPS;
     SignalType signal = SignalType::GPS_L1CA;
@@ -81,7 +59,15 @@ struct SignalConfig {
 };
 
 /**
- * One trajectory segment.
+ * One trajectory segment (segment mode).
+ *
+ * Used fields per type:
+ *   ConstSpeed     : duration          (keeps the current speed; `speed` is not used by SignalSim)
+ *   ConstAcc       : duration, acceleration (m/s^2, along the current direction)
+ *   VerticalAcc    : duration, acceleration (m/s^2, vertical)
+ *   Jerk           : duration, jerk (m/s^3)   [falls back to `acceleration` if jerk == 0]
+ *   HorizontalTurn : duration, radius (m, signed) or turnRate (deg/s, signed)
+ *                    [falls back to `acceleration` as turn rate if both are 0]
  */
 struct TrajectorySegment {
     TrajectoryType type = TrajectoryType::ConstSpeed;
@@ -90,13 +76,28 @@ struct TrajectorySegment {
 
     double speed = 0.0;
     double acceleration = 0.0;
-    double course = 0.0;
+    double jerk = 0.0;
+    double turnRate = 0.0;     // deg/s
+    double course = 0.0;       // informational
     double radius = 0.0;
 };
 
 /**
- * Output configuration.
+ * One waypoint (waypoint mode).
+ *
+ * Either ALL waypoints have `time` (strictly increasing, seconds), or NONE
+ * of them does; then the segment time is distance / speed, where speed is the
+ * `speed` of the segment's starting point, or GNSSConfig::waypointDefaultSpeed.
  */
+struct WaypointConfig {
+    double latitude  = 0.0;    // deg
+    double longitude = 0.0;    // deg
+    double altitude  = 0.0;    // m
+    double time  = -1.0;       // s, <0: not given
+    double speed = -1.0;       // m/s, <0: not given
+};
+
+/** Output configuration. */
 struct OutputConfig {
     OutputFormat format = OutputFormat::IQ16;
 
@@ -109,31 +110,21 @@ struct OutputConfig {
 
     bool generateTag = false;
 
-    /**
-     * Optional output file override.
-     *
-     * If empty, filename is used.
-     */
+    /** Optional output file override. If empty, filename is used. */
     std::string binFile;
 };
 
-/**
- * Signal power/noise configuration.
- */
+/** Signal power/noise configuration. */
 struct PowerConfig {
     double noiseFloor = -172.0;
 
-    /**
-     * Initial C/N0 in dB-Hz.
-     */
+    /** Initial C/N0 in dB-Hz. */
     double initPower = 47.0;
 
     bool elevationAdjust = true;
 };
 
-/**
- * Simulation start time.
- */
+/** Simulation start time. */
 struct TimeConfig {
     int year = 2021;
     int month = 6;
@@ -144,32 +135,18 @@ struct TimeConfig {
 
     double second = 0.0;
 
-    /**
-     * Kept for compatibility/documentation.
-     *
-     * The current IfGenParams interface uses UTC fields.
-     */
+    /** Kept for compatibility/documentation. The engine uses UTC fields. */
     std::string timeType = "UTC";
 };
 
-/**
- * Initial receiver position.
- *
- * Latitude/longitude are degrees.
- * Altitude is meters.
- */
+/** Initial receiver position (segment mode only). */
 struct PositionConfig {
     double latitude = 47.492721;
     double longitude = 19.015773;
     double altitude = 20.0;
 };
 
-/**
- * Initial receiver velocity.
- *
- * Speed is m/s.
- * Course is degrees.
- */
+/** Initial receiver velocity (segment mode only). */
 struct VelocityConfig {
     double speed = 0.0;
     double course = 0.0;
@@ -178,9 +155,11 @@ struct VelocityConfig {
 /**
  * Complete GNSS simulation configuration.
  *
- * This is the primary programmatic configuration API.
+ * Two trajectory modes (mutually exclusive):
  *
- * No JSON file is required when using initialize(const GNSSConfig&).
+ *   1. Segment mode : position + velocity + trajectory[]
+ *   2. Waypoint mode: waypoints[]  (position, velocity, trajectory[] are ignored,
+ *                                   trajectory[] must be empty)
  */
 struct GNSSConfig {
     TimeConfig time;
@@ -189,17 +168,18 @@ struct GNSSConfig {
 
     VelocityConfig velocity;
 
+    /** Segment mode. */
     std::vector<TrajectorySegment> trajectory;
 
-    /**
-     * RINEX navigation file.
-     */
+    /** Waypoint mode: if not empty, waypoint mode is used. */
+    std::vector<WaypointConfig> waypoints;
+    WaypointInterpolation waypointInterpolation = WaypointInterpolation::Spline;
+    double waypointDefaultSpeed = 0.0;   // m/s, used if a waypoint has neither time nor speed
+
+    /** RINEX navigation file. */
     std::string ephemerisFile;
 
-    /**
-     * If true, RINEX ephemerides are actualized to the
-     * requested simulation start time.
-     */
+    /** If true, RINEX ephemerides are actualized to the simulation start time. */
     bool actualizeRinex = false;
 
     std::vector<SignalConfig> signals;
@@ -208,9 +188,7 @@ struct GNSSConfig {
 
     PowerConfig power;
 
-    /**
-     * Engine/runtime options.
-     */
+    /** Engine/runtime options. */
     bool writeBin = true;
     bool writeTag = false;
 
@@ -226,34 +204,25 @@ struct GNSSConfig {
     float gain = 1.0f;
 };
 
-/**
- * Generation statistics.
- */
+/** Generation statistics. */
 struct GenerationStats {
-    double duration = 0.0;
+    double duration = 0.0;          // generated signal duration, s
 
     double dataSizeMB = 0.0;
 
-    int totalSamples = 0;
+    std::uint64_t totalSamples = 0;
 
     int clippedSamples = 0;
 
-    int visibleSatellites = 0;
+    int visibleSatellites = 0;      // number of channels
 
-    double generationTime = 0.0;
+    double generationTime = 0.0;    // wall time, s
 };
 
 /**
  * High-level GNSS generator API.
  *
- * This is the recommended API for applications embedding GNSSLib.
- *
- * The generator can be initialized either:
- *
- *   1. directly from GNSSConfig
- *   2. from a JSON configuration file
- *
- * For library integration, GNSSConfig is the preferred interface.
+ * Initialization either from GNSSConfig (preferred) or from a JSON file.
  */
 class GNSSGenerator {
 public:
@@ -267,64 +236,33 @@ public:
     GNSSGenerator(GNSSGenerator&&) noexcept;
     GNSSGenerator& operator=(GNSSGenerator&&) noexcept;
 
-    /**
-     * Initialize directly from C++ parameters.
-     *
-     * No JSON file is read.
-     *
-     * Internally:
-     *
-     *   GNSSConfig -> IfGenParams -> IfGenEngine
-     */
+    /** Initialize directly from C++ parameters (no JSON is read). */
     bool initialize(const GNSSConfig& config);
 
-    /**
-     * Initialize from a JSON configuration file.
-     *
-     * This is retained for standalone/config-file based use.
-     */
+    /** Initialize from a JSON configuration file. */
     bool initializeFromJSON(const std::string& jsonFile);
 
-    /**
-     * Set/override the output file.
-     *
-     * If the generator is already initialized, the new output
-     * file is applied on the next generation/openStream call.
-     */
+    /** Set/override the output file (applied on the next generate/openStream). */
     void setOutputFile(const std::string& filename);
 
     /**
-     * Generate a complete simulation.
-     *
-     * durationSeconds specifies the generated signal duration.
+     * Generate a simulation into the output file.
+     * Generation stops after durationSeconds or at the end of the trajectory,
+     * whichever comes first.
      */
     bool generate(double durationSeconds);
 
-    /**
-     * Generate a complete simulation.
-     *
-     * durationMs specifies the generated signal duration.
-     */
+    /** Same as above, duration in milliseconds. */
     bool generate(int durationMs);
 
-    /**
-     * Open the generator for streaming.
-     *
-     * If writeBin is true, the engine may also write the generated
-     * samples to a binary output file.
-     */
+    /** Open the generator for streaming. */
     bool openStream(
         bool writeBin = false,
         const std::string& binFile = "",
         float gain = 1.0f
     );
 
-    /**
-     * Compatibility overload.
-     *
-     * Opens the configured simulation into an externally supplied
-     * IfGenEngine.
-     */
+    /** Opens the configured simulation into an externally supplied IfGenEngine. */
     bool openStream(
         IfGenEngine& engine,
         bool writeBin = false,
@@ -332,79 +270,46 @@ public:
         float gain = 1.0f
     );
 
-    /**
-     * Read generated complex samples.
-     *
-     * Returns the number of samples actually read.
-     *
-     * The stream must have been opened with openStream().
-     */
+    /** Read generated complex samples; returns the number of samples read. */
     std::size_t read(
         std::complex<float>* out,
         std::size_t n
     );
 
-    /**
-     * Stream generated samples through a callback.
-     *
-     * Returning false from the callback stops the stream.
-     *
-     * Returns the number of samples processed.
-     */
+    /** Stream samples through a callback (return false to stop). */
     std::size_t stream(
         const IfGenEngine::SampleCallback& callback,
         std::size_t chunk = 0
     );
 
-    /**
-     * Close the active stream.
-     */
+    /** Close the active stream. */
     void closeStream();
 
-    /**
-     * Legacy data accessor.
-     *
-     * The current implementation is stream-oriented and therefore
-     * this vector is normally empty.
-     */
+    /** Legacy data accessor (normally empty). */
     const std::vector<std::uint8_t>& getData() const
     {
         return m_data;
     }
 
-    /**
-     * Get generation statistics.
-     */
     const GenerationStats& getStats() const
     {
         return m_stats;
     }
 
-    /**
-     * Get the active high-level configuration.
-     */
     const GNSSConfig& getConfig() const
     {
         return m_config;
     }
 
     /**
-     * Save generated output.
-     *
-     * If generation was performed with writeBin=true, this copies/
-     * finalizes the produced output to filename when supported by
-     * the current backend.
+     * Copy the produced output file to `filename`.
+     * With an empty filename nothing is copied; returns true if a produced file exists.
      */
     bool saveToFile(const std::string& filename = "");
 
-    /**
-     * Reset the generator.
-     */
+    /** Reset the generator. */
     void clear();
 
-    /**
-     * Check whether the generator has been initialized.
-     */
     bool isInitialized() const
     {
         return m_initialized;
@@ -425,65 +330,37 @@ private:
 };
 
 
-/**
- * Utility functions.
- */
+/** Utility functions. */
 namespace Utils {
 
 bool utcToGpsTime(
-    int year,
-    int month,
-    int day,
-    int hour,
-    int minute,
-    double second,
-    double& gpsWeek,
-    double& gpsSeconds
+    int year, int month, int day, int hour, int minute, double second,
+    double& gpsWeek, double& gpsSeconds
 );
 
 void llaToEcef(
-    double latitudeDeg,
-    double longitudeDeg,
-    double altitudeM,
-    double& x,
-    double& y,
-    double& z
+    double latitudeDeg, double longitudeDeg, double altitudeM,
+    double& x, double& y, double& z
 );
 
 void ecefToLla(
-    double x,
-    double y,
-    double z,
-    double& latitudeDeg,
-    double& longitudeDeg,
-    double& altitudeM
+    double x, double y, double z,
+    double& latitudeDeg, double& longitudeDeg, double& altitudeM
 );
 
 double calculateElevation(
-    double receiverX,
-    double receiverY,
-    double receiverZ,
-    double satelliteX,
-    double satelliteY,
-    double satelliteZ
+    double receiverX, double receiverY, double receiverZ,
+    double satelliteX, double satelliteY, double satelliteZ
 );
 
 double calculateAzimuth(
-    double receiverX,
-    double receiverY,
-    double receiverZ,
-    double satelliteX,
-    double satelliteY,
-    double satelliteZ
+    double receiverX, double receiverY, double receiverZ,
+    double satelliteX, double satelliteY, double satelliteZ
 );
 
 double calculateDistance(
-    double receiverX,
-    double receiverY,
-    double receiverZ,
-    double satelliteX,
-    double satelliteY,
-    double satelliteZ
+    double receiverX, double receiverY, double receiverZ,
+    double satelliteX, double satelliteY, double satelliteZ
 );
 
 double calculateDoppler(
@@ -506,48 +383,34 @@ std::string formatTime(
  * C API
  *
  * The C API remains available for applications that cannot use
- * the C++ interface.
+ * the C++ interface. It is JSON based, so waypoint mode is available
+ * through the "waypointList" JSON key.
  */
 extern "C" {
 
 typedef struct GNSSGeneratorHandle GNSSGeneratorHandle;
 
-/**
- * Create/destroy generator.
- */
 GNSSGeneratorHandle* gnss_create_generator();
 
 void gnss_destroy_generator(
     GNSSGeneratorHandle* generator
 );
 
-/**
- * JSON initialization.
- */
 int gnss_init_from_json(
     GNSSGeneratorHandle* generator,
     const char* json_file
 );
 
-/**
- * Generate complete simulation.
- */
 int gnss_generate(
     GNSSGeneratorHandle* generator,
     double duration_seconds
 );
 
-/**
- * Save generated output.
- */
 int gnss_save(
     GNSSGeneratorHandle* generator,
     const char* filename
 );
 
-/**
- * Retrieve basic statistics.
- */
 int gnss_get_stats(
     GNSSGeneratorHandle* generator,
     double* duration,
@@ -555,9 +418,7 @@ int gnss_get_stats(
 );
 
 
-/*
- * Streaming API
- */
+/* Streaming API */
 
 typedef struct gnss_stream gnss_stream;
 

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <complex>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -18,19 +19,7 @@ namespace {
 using namespace gnss;
 
 /*
- * Convert public GNSSConfig into the canonical internal
- * IfGenParams representation.
- *
- *     public API
- *         |
- *         v
- *     GNSSConfig
- *         |
- *         v
- *     IfGenParams
- *         |
- *         v
- *     IfGenEngine
+ * GNSSConfig -> IfGenParams (a motor kanonikus belso reprezentacioja).
  */
 IfGenParams ToIfGenParams(const GNSSConfig& c)
 {
@@ -55,16 +44,15 @@ IfGenParams ToIfGenParams(const GNSSConfig& c)
     p.time.minute = c.time.minute;
     p.time.second = c.time.second;
 
-    /* Position. */
+    /* Position / velocity (segment mode). */
     p.position.latitudeDeg  = c.position.latitude;
     p.position.longitudeDeg = c.position.longitude;
     p.position.altitudeM    = c.position.altitude;
 
-    /* Velocity. */
     p.velocity.speedMps  = c.velocity.speed;
     p.velocity.courseDeg = c.velocity.course;
 
-    /* Trajectory. */
+    /* Trajectory segments (segment mode). */
     p.trajectory.clear();
     p.trajectory.reserve(c.trajectory.size());
 
@@ -89,21 +77,41 @@ IfGenParams ToIfGenParams(const GNSSConfig& c)
 
         case TrajectoryType::Jerk:
             dst.type     = IfGenTrajectoryType::Jerk;
-            dst.jerkMps3 = src.acceleration;
+            dst.jerkMps3 = (src.jerk != 0.0) ? src.jerk : src.acceleration;  // regi kompatibilitas
             break;
 
         case TrajectoryType::HorizontalTurn:
             dst.type         = IfGenTrajectoryType::HorizontalTurn;
-            dst.turnRateDegS = (src.acceleration != 0.0) ? src.acceleration : src.radius;
+            dst.radiusM      = src.radius;
+            // regi kompatibilitas: ha nincs turnRate es radius, az acceleration a szogsebesseg
+            dst.turnRateDegS = (src.turnRate != 0.0) ? src.turnRate
+                             : (src.radius == 0.0)   ? src.acceleration
+                                                     : 0.0;
             break;
         }
 
         dst.durationS = src.duration;
         dst.courseDeg = src.course;
-        dst.radiusM   = src.radius;
 
         p.trajectory.push_back(dst);
     }
+
+    /* Waypoints (waypoint mode). */
+    p.waypoints.clear();
+    p.waypoints.reserve(c.waypoints.size());
+    for (const auto& w : c.waypoints) {
+        IfGenWaypoint g{};
+        g.latitudeDeg  = w.latitude;
+        g.longitudeDeg = w.longitude;
+        g.altitudeM    = w.altitude;
+        g.timeS        = w.time;
+        g.speedMps     = w.speed;
+        p.waypoints.push_back(g);
+    }
+    p.waypointInterp = (c.waypointInterpolation == WaypointInterpolation::Linear)
+                           ? IfGenWaypointInterp::Linear
+                           : IfGenWaypointInterp::Spline;
+    p.waypointDefaultSpeedMps = c.waypointDefaultSpeed;
 
     /* Navigation file. */
     p.ephemerisFile = c.ephemerisFile;
@@ -126,9 +134,9 @@ IfGenParams ToIfGenParams(const GNSSConfig& c)
     }
 
     /* Power. */
-    p.power.noiseFloorDbm    = c.power.noiseFloor;
-    p.power.initCN0DbHz      = c.power.initPower;
-    p.power.elevationAdjust  = c.power.elevationAdjust;
+    p.power.noiseFloorDbm   = c.power.noiseFloor;
+    p.power.initCN0DbHz     = c.power.initPower;
+    p.power.elevationAdjust = c.power.elevationAdjust;
 
     /* Signals. */
     p.signals.clear();
@@ -178,6 +186,42 @@ IfGenParams ToIfGenParams(const GNSSConfig& c)
     }
 
     return p;
+}
+
+/*
+ * Lefuttatja a generalast a megadott idotartamig (vagy a trajektoria vegeig),
+ * lezarja az engine-t (igy a .bin fajl veglegesen kiirodik), majd kitolti a statisztikat.
+ */
+struct RunResult {
+    std::uint64_t samples = 0;
+    double        sampleRateHz = 0.0;
+    int           channels = 0;
+    std::string   outputFile;
+    double        elapsedS = 0.0;
+};
+
+RunResult RunEngine(IfGenEngine& engine, double durationSeconds)
+{
+    const auto start = std::chrono::steady_clock::now();
+
+    const IfGenInfo info = engine.Info();           // masolat: a Close() utan mar nem elerheto
+    const double maxSamples = durationSeconds * info.sampleRateHz;
+
+    std::uint64_t total = 0;
+    engine.Stream([&](const std::complex<float>*, std::size_t n) {
+        total += n;
+        return static_cast<double>(total) < maxSamples;   // 1 ms-os blokk-granularitas
+    });
+
+    engine.Close();                                 // fajl flush/close
+
+    RunResult r;
+    r.samples      = total;
+    r.sampleRateHz = info.sampleRateHz;
+    r.channels     = info.nChannels;
+    r.outputFile   = info.outputFile;
+    r.elapsedS     = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    return r;
 }
 
 } // anonymous namespace
@@ -232,6 +276,8 @@ GNSSGenerator& GNSSGenerator::operator=(GNSSGenerator&& other) noexcept
 
 bool GNSSGenerator::initialize(const GNSSConfig& config)
 {
+    if (!m_impl) m_impl = std::make_unique<Impl>();   // move utan nullptr lehet
+
     try {
         IfGenParams params = ToIfGenParams(config);
 
@@ -265,13 +311,13 @@ bool GNSSGenerator::initialize(const GNSSConfig& config)
     catch (const std::exception& e) {
         std::cerr << "GNSSGenerator::initialize(): " << e.what() << '\n';
         m_initialized = false;
-        if (m_impl) { m_impl->engine.reset(); m_impl->streamOpen = false; }
+        m_impl->engine.reset(); m_impl->streamOpen = false;
         return false;
     }
     catch (...) {
         std::cerr << "GNSSGenerator::initialize(): unknown exception\n";
         m_initialized = false;
-        if (m_impl) { m_impl->engine.reset(); m_impl->streamOpen = false; }
+        m_impl->engine.reset(); m_impl->streamOpen = false;
         return false;
     }
 }
@@ -283,6 +329,7 @@ bool GNSSGenerator::initializeFromJSON(const std::string& jsonFile)
         std::cerr << "GNSSGenerator::initializeFromJSON(): empty JSON file path\n";
         return false;
     }
+    if (!m_impl) m_impl = std::make_unique<Impl>();
 
     try {
         auto engine = std::make_unique<IfGenEngine>();
@@ -346,7 +393,7 @@ void GNSSGenerator::setOutputFile(const std::string& filename)
 
 bool GNSSGenerator::generate(double durationSeconds)
 {
-    if (!m_initialized) {
+    if (!m_initialized || !m_impl) {
         std::cerr << "GNSSGenerator::generate(): generator is not initialized\n";
         return false;
     }
@@ -356,7 +403,9 @@ bool GNSSGenerator::generate(double durationSeconds)
     }
 
     try {
-        const auto start = std::chrono::steady_clock::now();
+        closeStream();   // egy esetleg nyitott stream ugyanazt a fajlt irna
+
+        auto engine = std::make_unique<IfGenEngine>();
 
         if (!m_impl->jsonFile.empty()) {
             IfGenOptions options;
@@ -367,69 +416,35 @@ bool GNSSGenerator::generate(double durationSeconds)
             if (!m_impl->outputOverride.empty()) {
                 options.binFile = m_impl->outputOverride;
             }
+            engine->Init(options);
+        }
+        else {
+            GNSSConfig cfg = m_config;
+            cfg.writeBin = true;
 
-            IfGenEngine engine;
-            engine.Init(options);
-
-            std::size_t totalSamples = 0;
-            engine.Stream([&](const std::complex<float>*, std::size_t n) {
-                totalSamples += n;
-                return true;
-            });
-
-            const auto end = std::chrono::steady_clock::now();
-            const double elapsed = std::chrono::duration<double>(end - start).count();
-            const auto& info = engine.Info();
-
-            m_stats.duration          = durationSeconds;
-            m_stats.generationTime    = elapsed;
-            m_stats.totalSamples      = static_cast<int>(totalSamples);
-            m_stats.visibleSatellites = info.nChannels;
-
-            if (!info.outputFile.empty() && std::filesystem::exists(info.outputFile)) {
-                const auto size = std::filesystem::file_size(info.outputFile);
-                m_stats.dataSizeMB = static_cast<double>(size) / (1024.0 * 1024.0);
-                m_impl->producedFile = info.outputFile;
+            if (!m_impl->outputOverride.empty()) {
+                cfg.output.binFile  = m_impl->outputOverride;
+                cfg.output.filename = m_impl->outputOverride;
             }
-            return true;
+
+            IfGenParams params = ToIfGenParams(cfg);
+            params.writeBin = true;
+            engine->Init(params);
         }
 
-        GNSSConfig cfg = m_config;
-        cfg.writeBin = true;
+        const RunResult r = RunEngine(*engine, durationSeconds);
 
-        if (!m_impl->outputOverride.empty()) {
-            cfg.output.binFile   = m_impl->outputOverride;
-            cfg.output.filename  = m_impl->outputOverride;
+        m_stats.duration          = (r.sampleRateHz > 0.0) ? static_cast<double>(r.samples) / r.sampleRateHz : 0.0;
+        m_stats.generationTime    = r.elapsedS;
+        m_stats.totalSamples      = r.samples;
+        m_stats.visibleSatellites = r.channels;
+
+        std::error_code ec;
+        if (!r.outputFile.empty() && std::filesystem::exists(r.outputFile, ec)) {
+            const auto size = std::filesystem::file_size(r.outputFile, ec);
+            if (!ec) m_stats.dataSizeMB = static_cast<double>(size) / (1024.0 * 1024.0);
+            m_impl->producedFile = r.outputFile;
         }
-
-        IfGenParams params = ToIfGenParams(cfg);
-        params.writeBin = true;
-
-        auto engine = std::make_unique<IfGenEngine>();
-        engine->Init(params);
-
-        std::size_t totalSamples = 0;
-        engine->Stream([&](const std::complex<float>*, std::size_t n) {
-            totalSamples += n;
-            return true;
-        });
-
-        const auto end = std::chrono::steady_clock::now();
-        const double elapsed = std::chrono::duration<double>(end - start).count();
-        const auto& info = engine->Info();
-
-        m_stats.duration          = durationSeconds;
-        m_stats.generationTime    = elapsed;
-        m_stats.totalSamples      = static_cast<int>(totalSamples);
-        m_stats.visibleSatellites = info.nChannels;
-
-        if (!info.outputFile.empty() && std::filesystem::exists(info.outputFile)) {
-            const auto size = std::filesystem::file_size(info.outputFile);
-            m_stats.dataSizeMB = static_cast<double>(size) / (1024.0 * 1024.0);
-            m_impl->producedFile = info.outputFile;
-        }
-
-        m_impl->engine = std::move(engine);
         return true;
     }
     catch (const std::exception& e) {
@@ -452,7 +467,7 @@ bool GNSSGenerator::generate(int durationMs)
 
 bool GNSSGenerator::openStream(bool writeBin, const std::string& binFile, float gain)
 {
-    if (!m_initialized) {
+    if (!m_initialized || !m_impl) {
         std::cerr << "GNSSGenerator::openStream(): generator is not initialized\n";
         return false;
     }
@@ -518,7 +533,7 @@ bool GNSSGenerator::openStream(bool writeBin, const std::string& binFile, float 
 
 bool GNSSGenerator::openStream(IfGenEngine& engine, bool writeBin, const std::string& binFile, float gain)
 {
-    if (!m_initialized) {
+    if (!m_initialized || !m_impl) {
         std::cerr << "GNSSGenerator::openStream(engine): generator is not initialized\n";
         return false;
     }
@@ -542,8 +557,13 @@ bool GNSSGenerator::openStream(IfGenEngine& engine, bool writeBin, const std::st
         cfg.writeBin = writeBin;
         cfg.gain     = gain;
 
-        if (!binFile.empty())                       cfg.output.binFile = binFile;
-        else if (!m_impl->outputOverride.empty())   cfg.output.binFile = m_impl->outputOverride;
+        if (!binFile.empty()) {
+            cfg.output.binFile  = binFile;
+            cfg.output.filename = binFile;
+        } else if (!m_impl->outputOverride.empty()) {
+            cfg.output.binFile  = m_impl->outputOverride;
+            cfg.output.filename = m_impl->outputOverride;
+        }
 
         IfGenParams params = ToIfGenParams(cfg);
         params.writeBin = writeBin;
@@ -623,63 +643,52 @@ void GNSSGenerator::closeStream()
 
 bool GNSSGenerator::saveToFile(const std::string& filename)
 {
-    std::string source;
+    if (!m_impl) return false;
 
-    if (!filename.empty()) {
-        source = filename;
-    }
-    else {
-        source = m_impl->producedFile;
-    }
+    /* A forras mindig a generalt fajl; a filename a CEL. */
+    const std::string& source = m_impl->producedFile;
 
-    /* Nothing to save. */
     if (source.empty()) {
         return false;
     }
 
-    if (!std::filesystem::exists(source)) {
+    std::error_code ec;
+    if (!std::filesystem::exists(source, ec) || ec) {
         return false;
     }
 
-    /*
-     * If the requested destination is the same file, nothing
-     * needs to be copied.
-     *
-     * FIX: std::filesystem::equivalent takes a non-const
-     * std::error_code&, so we must pass an lvalue, not a
-     * temporary. Also check the returned ec to make sure the
-     * comparison actually succeeded.
-     */
-    if (!filename.empty()) {
-        std::error_code ec;
-        if (std::filesystem::equivalent(source, filename, ec) && !ec) {
+    /* Nincs cel: nincs mit masolni, a generalt fajl letezik. */
+    if (filename.empty()) {
+        return true;
+    }
+
+    /* Ugyanaz a fajl: nincs teendo. */
+    {
+        std::error_code ec2;
+        if (std::filesystem::exists(filename, ec2) && !ec2 &&
+            std::filesystem::equivalent(source, filename, ec2) && !ec2) {
             return true;
         }
     }
 
-    /* When a destination is requested, copy the generated file. */
-    if (!filename.empty()) {
-        try {
-            std::filesystem::copy_file(
-                source,
-                filename,
-                std::filesystem::copy_options::overwrite_existing
-            );
+    try {
+        std::filesystem::copy_file(
+            source,
+            filename,
+            std::filesystem::copy_options::overwrite_existing
+        );
 
-            m_impl->producedFile = filename;
-            return true;
-        }
-        catch (const std::exception& e) {
-            std::cerr << "GNSSGenerator::saveToFile(): " << e.what() << '\n';
-            return false;
-        }
-        catch (...) {
-            std::cerr << "GNSSGenerator::saveToFile(): unknown exception\n";
-            return false;
-        }
+        m_impl->producedFile = filename;
+        return true;
     }
-
-    return true;
+    catch (const std::exception& e) {
+        std::cerr << "GNSSGenerator::saveToFile(): " << e.what() << '\n';
+        return false;
+    }
+    catch (...) {
+        std::cerr << "GNSSGenerator::saveToFile(): unknown exception\n";
+        return false;
+    }
 }
 
 
